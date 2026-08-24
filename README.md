@@ -24,7 +24,7 @@ Bot hanya memproses data yang memang diterima oleh akun WhatsApp tertaut. Sumber
 | Pesan channel langsung | Tidak diambil otomatis | Bot tidak melakukan pembacaan langsung atau scraping channel; hanya media yang benar-benar diterima oleh akun tertaut yang diproses |
 | View Once | Tidak diteruskan | Tetap dilewati untuk menghormati kontrol sementara dan privasi pesan |
 
-> **Batas penting:** bot tidak membaca atau meneruskan seluruh chat. Pipeline hanya menerima Status/Stories, Group Status, wrapper Status yang relevan, serta media channel yang memang dikirim sebagai forward dan diizinkan oleh konfigurasi. Forward channel ke chat biasa dicatat sebagai `channel_forwarded_chat` dan `forwarded_channel_media_forward_only`; konten channel yang masuk sebagai Status dicatat sebagai `channel_status` dan menggunakan auto-like Status biasa. Opsi `forwardedChannelMediaEnabled` dan `forwardedChannelMediaOwnerOnly` tersedia di `config.js`.
+> **Batas penting:** bot tidak membaca atau meneruskan seluruh chat. Media gambar/video/dokumen yang dikirim langsung melalui chat pribadi biasa juga tidak diproses dan tidak diteruskan ke Telegram. Pipeline hanya menerima Status/Stories, Group Status, wrapper Status yang relevan, serta media channel yang memang dikirim sebagai forward dan diizinkan oleh konfigurasi. Forward channel ke chat biasa dicatat sebagai `channel_forwarded_chat` dan `forwarded_channel_media_forward_only`; konten channel yang masuk sebagai Status dicatat sebagai `channel_status` dan menggunakan auto-like Status biasa. Opsi `forwardedChannelMediaEnabled` dan `forwardedChannelMediaOwnerOnly` tersedia di `config.js`.
 
 ## Penguatan penangkapan sinyal status
 
@@ -248,9 +248,13 @@ Tiga view berikut menyediakan tampilan yang lebih mudah dibaca dan mengubah epoc
 
 | View | Isi |
 |---|---|
-| `v_processed_status_records` | Riwayat status yang sudah diproses, termasuk kategori, tipe media, pengirim, dan signature deduplikasi |
-| `v_pending_status_backlog` | Antrian status yang belum selesai dengan metadata pesan, asal konten, jumlah percobaan, dan waktu pembuatan/perubahan |
+| `v_processed_status_records` | Riwayat logis Status yang sudah diproses, termasuk kategori, tipe media, pengirim, dan signature deduplikasi |
+| `v_pending_status_backlog` | Antrian logis Status yang belum selesai dengan metadata pesan, asal konten, jumlah percobaan, dan waktu pembuatan/perubahan |
 | `v_daily_status_reports` | Ringkasan laporan harian dengan waktu pembuatan yang terbaca |
+
+`processed_status_fingerprints` adalah tabel indeks deduplikasi internal. Satu Status dapat memiliki beberapa fingerprint teknis untuk mendeteksi pengulangan key, signature, atau bentuk media, tetapi tabel tersebut bukan log forwarding kedua. Log yang dibaca operator berada di `v_processed_status_records`, dan satu identitas pesan hanya dipertahankan satu kali.
+
+Untuk mencegah queueKey berbeda membuat salinan, backlog memiliki unique index pada pasangan `remote_jid` dan `message_id`. Migrasi juga membersihkan duplicate lama berdasarkan pasangan tersebut, sedangkan retry dan reconnect menggunakan upsert.
 
 Glossary metadata utama pada backlog adalah sebagai berikut:
 

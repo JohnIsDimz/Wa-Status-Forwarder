@@ -380,16 +380,6 @@ function initAntiSpamStorage() {
             ON processed_status_records (processed_at);
             CREATE INDEX IF NOT EXISTS idx_processed_status_records_message_id
             ON processed_status_records (message_id);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_status_records_remote_message_unique
-            ON processed_status_records (remote_jid, message_id)
-            WHERE remote_jid IS NOT NULL AND remote_jid <> '' AND message_id IS NOT NULL AND message_id <> '';
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_status_records_participant_message_type_unique
-            ON processed_status_records (participant, message_id, media_type)
-            WHERE participant IS NOT NULL AND participant <> '' AND message_id IS NOT NULL AND message_id <> '';
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_status_records_content_signature_unique
-            ON processed_status_records (content_signature)
-            WHERE content_signature IS NOT NULL AND content_signature <> '';
-
             CREATE TABLE IF NOT EXISTS pending_status_backlog (
                 queue_key TEXT PRIMARY KEY,
                 message_blob TEXT NOT NULL,
@@ -464,8 +454,69 @@ function initAntiSpamStorage() {
         }
 
         antiSpamDb.exec(`
+            DELETE FROM processed_status_records
+            WHERE rowid NOT IN (
+                SELECT MAX(rowid)
+                FROM processed_status_records
+                WHERE remote_jid IS NOT NULL AND remote_jid <> ''
+                  AND message_id IS NOT NULL AND message_id <> ''
+                GROUP BY remote_jid, message_id
+            )
+            AND remote_jid IS NOT NULL AND remote_jid <> ''
+            AND message_id IS NOT NULL AND message_id <> '';
+
+            DELETE FROM processed_status_records
+            WHERE rowid NOT IN (
+                SELECT MAX(rowid)
+                FROM processed_status_records
+                WHERE participant IS NOT NULL AND participant <> ''
+                  AND message_id IS NOT NULL AND message_id <> ''
+                  AND media_type IS NOT NULL AND media_type <> ''
+                GROUP BY participant, message_id, media_type
+            )
+            AND participant IS NOT NULL AND participant <> ''
+            AND message_id IS NOT NULL AND message_id <> ''
+            AND media_type IS NOT NULL AND media_type <> '';
+
+            DELETE FROM processed_status_records
+            WHERE rowid NOT IN (
+                SELECT MAX(rowid)
+                FROM processed_status_records
+                WHERE content_signature IS NOT NULL AND content_signature <> ''
+                GROUP BY content_signature
+            )
+            AND content_signature IS NOT NULL AND content_signature <> '';
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_status_records_remote_message_unique
+            ON processed_status_records (remote_jid, message_id)
+            WHERE remote_jid IS NOT NULL AND remote_jid <> ''
+              AND message_id IS NOT NULL AND message_id <> '';
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_status_records_participant_message_type_unique
+            ON processed_status_records (participant, message_id, media_type)
+            WHERE participant IS NOT NULL AND participant <> ''
+              AND message_id IS NOT NULL AND message_id <> ''
+              AND media_type IS NOT NULL AND media_type <> '';
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_processed_status_records_content_signature_unique
+            ON processed_status_records (content_signature)
+            WHERE content_signature IS NOT NULL AND content_signature <> '';
+
+            DELETE FROM pending_status_backlog
+            WHERE rowid NOT IN (
+                SELECT MAX(rowid)
+                FROM pending_status_backlog
+                WHERE remote_jid IS NOT NULL AND remote_jid <> ''
+                  AND message_id IS NOT NULL AND message_id <> ''
+                GROUP BY remote_jid, message_id
+            )
+            AND remote_jid IS NOT NULL AND remote_jid <> ''
+            AND message_id IS NOT NULL AND message_id <> '';
+
             CREATE INDEX IF NOT EXISTS idx_pending_status_backlog_message_id
             ON pending_status_backlog (message_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_status_backlog_remote_message_unique
+            ON pending_status_backlog (remote_jid, message_id)
+            WHERE remote_jid IS NOT NULL AND remote_jid <> ''
+              AND message_id IS NOT NULL AND message_id <> '';
 
             DROP VIEW IF EXISTS v_processed_status_records;
             CREATE VIEW v_processed_status_records AS
@@ -643,7 +694,24 @@ function initAntiSpamStorage() {
                     last_error,
                     owner_mark
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '© By John')
-                ON CONFLICT(queue_key) DO UPDATE SET
+                ON CONFLICT (remote_jid, message_id)
+                    WHERE remote_jid IS NOT NULL AND remote_jid <> ''
+                      AND message_id IS NOT NULL AND message_id <> ''
+                DO UPDATE SET
+                    queue_key = excluded.queue_key,
+                    message_blob = excluded.message_blob,
+                    source_type = excluded.source_type,
+                    content_source_type = excluded.content_source_type,
+                    message_id = excluded.message_id,
+                    remote_jid = excluded.remote_jid,
+                    participant_jid = excluded.participant_jid,
+                    status_category = excluded.status_category,
+                    media_type = excluded.media_type,
+                    source_jid = excluded.source_jid,
+                    source_name = excluded.source_name,
+                    display_name = excluded.display_name,
+                    updated_at = excluded.updated_at
+                ON CONFLICT (queue_key) DO UPDATE SET
                     message_blob = excluded.message_blob,
                     source_type = excluded.source_type,
                     content_source_type = excluded.content_source_type,
@@ -2917,6 +2985,7 @@ async function markFingerprintsProcessed(statusPrimaryKey, fingerprints, meta) {
     const normalizedRemoteJid = normalizeStorageIdentity(meta.remoteJid || '').value;
     const normalizedChatScope = normalizeStorageString(meta.chatScope || '', 50);
     const normalizedSourceType = normalizeStorageString(meta.sourceType || '', 50);
+    const normalizedStatusCategory = normalizeStorageString(meta.statusCategory || '', 50);
     const normalizedType = normalizeStorageString(meta.type || '', 50);
     const normalizedMessageId = normalizeStorageString(meta.messageId || '', 255);
     const normalizedDisplayName = normalizeStorageString(meta.displayName || '', 255);
@@ -2940,6 +3009,7 @@ async function markFingerprintsProcessed(statusPrimaryKey, fingerprints, meta) {
                     remoteJid: normalizedRemoteJid,
                     chatScope: normalizedChatScope,
                     sourceType: normalizedSourceType,
+                    statusCategory: normalizedStatusCategory,
                     mediaType: normalizedType,
                     messageId: normalizedMessageId,
                     contentSignature: normalizedContentSignature,
@@ -2962,6 +3032,7 @@ async function markFingerprintsProcessed(statusPrimaryKey, fingerprints, meta) {
                     remoteJid: normalizedRemoteJid,
                     chatScope: normalizedChatScope,
                     sourceType: normalizedSourceType,
+                    statusCategory: normalizedStatusCategory,
                     mediaType: normalizedType,
                     messageId: normalizedMessageId,
                     contentSignature: normalizedContentSignature
@@ -2975,6 +3046,7 @@ async function markFingerprintsProcessed(statusPrimaryKey, fingerprints, meta) {
                 remoteJid: normalizedRemoteJid,
                 chatScope: normalizedChatScope,
                 sourceType: normalizedSourceType,
+                statusCategory: normalizedStatusCategory,
                 mediaType: normalizedType,
                 messageId: normalizedMessageId,
                 contentSignature: normalizedContentSignature
@@ -4355,6 +4427,7 @@ async function forwardStatusMedia(sock, msg) {
             chatScope: detectMessageScope(msg),
             sourceType: mediaInfo.sourceType || '',
             type: mediaInfo.type,
+            statusCategory: mediaInfo.statusCategory || '',
             messageId: msg.key?.id || '',
             contentSignature: statusProbe.contentSignature,
             displayName: identity.displayName
