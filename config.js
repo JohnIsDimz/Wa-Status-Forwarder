@@ -242,16 +242,6 @@ module.exports = {
         maxRetries: 2,
         footerText: '© By John'
     },
-    sound: {
-        enabled: true,
-        files: {
-            connected: 'sound_connected.mp3',
-            disconnected: 'sound_disconnected.mp3',
-            callBlocked: 'sound_call_blocked.mp3'
-        },
-        useTerminalBellFallback: true,
-        cooldownMs: 10000
-    },
     operations: {
         healthStoreFile: 'healthcheck.json',
         metricsStoreFile: 'metrics.json',

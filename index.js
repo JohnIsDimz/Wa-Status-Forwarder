@@ -27,7 +27,6 @@ const { Boom } = require('@hapi/boom');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
 const pino = require('pino');
 const NodeCache = require('node-cache');
 const config = require('./config');
@@ -94,14 +93,6 @@ const SHOW_SEND_LOGS = config.console?.showSendLogs === true && !ULTRA_MINIMAL_C
 const SHOW_LIKE_LOGS = config.console?.showLikeLogs === true && !ULTRA_MINIMAL_CONSOLE;
 const SHOW_CALL_LOGS = config.console?.showCallLogs === true && !ULTRA_MINIMAL_CONSOLE;
 const COLORIZE_CONSOLE = config.console?.colorize !== false;
-const SOUND_ENABLED = config.sound?.enabled !== false;
-const SOUND_FILES = {
-    connected: path.join(__dirname, config.sound?.files?.connected || 'sound_connected.mp3'),
-    disconnected: path.join(__dirname, config.sound?.files?.disconnected || 'sound_disconnected.mp3'),
-    callBlocked: path.join(__dirname, config.sound?.files?.callBlocked || 'sound_call_blocked.mp3')
-};
-const USE_TERMINAL_BELL_FALLBACK = config.sound?.useTerminalBellFallback !== false;
-const SOUND_COOLDOWN_MS = Math.max(0, Number(config.sound?.cooldownMs || 10000));
 const DISPLAY_TIME_ZONE = 'Asia/Jakarta';
 const EXIT_CODE_FATAL_CONFIG = 70;
 const EXIT_CODE_FATAL_STORAGE = 71;
@@ -232,11 +223,6 @@ let waConnectionReady = false;
 let pendingAntiSpamStorageInfoDetail = '';
 let lastDatabaseIntegrityCheckAt = 0;
 let startupBannerShown = false;
-const lastSoundAt = {
-    connected: 0,
-    disconnected: 0,
-    callBlocked: 0
-};
 const processingFingerprints = new Set();
 const processingStatusKeys = new Set();
 const queuedStatusKeys = new Set();
@@ -958,66 +944,6 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
     } catch (error) {
         logError('Storage reset', error?.message || String(error));
     }
-}
-
-function playBellPattern(eventName = 'connected') {
-    if (!USE_TERMINAL_BELL_FALLBACK) {
-        return;
-    }
-
-    const patterns = {
-        connected: { count: 2, gap: 140 },
-        disconnected: { count: 1, gap: 0 },
-        callBlocked: { count: 3, gap: 110 }
-    };
-
-    const { count, gap } = patterns[eventName] || patterns.connected;
-    for (let i = 0; i < count; i += 1) {
-        setTimeout(() => {
-            process.stdout.write('\x07');
-        }, i * gap);
-    }
-}
-
-function playSound(eventName = 'connected') {
-    if (!SOUND_ENABLED) {
-        return;
-    }
-
-    const now = Date.now();
-    const lastAt = lastSoundAt[eventName] || 0;
-    if (now - lastAt < SOUND_COOLDOWN_MS) {
-        return;
-    }
-    lastSoundAt[eventName] = now;
-
-    const soundFile = SOUND_FILES[eventName] || SOUND_FILES.connected;
-    if (soundFile && fs.existsSync(soundFile)) {
-        const players = [
-            ['ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', soundFile]],
-            ['mpg123', ['-q', soundFile]],
-            ['mpg321', ['-q', soundFile]],
-            ['play', [soundFile]],
-            ['paplay', [soundFile]],
-            ['cvlc', ['--play-and-exit', '--quiet', soundFile]],
-            ['afplay', [soundFile]]
-        ];
-
-        for (const [cmd, args] of players) {
-            const found = spawnSync('sh', ['-c', `command -v ${cmd} >/dev/null 2>&1`], { stdio: 'ignore' });
-            if (found.status === 0) {
-                try {
-                    const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
-                    child.unref();
-                    return;
-                } catch {
-                    // try next player
-                }
-            }
-        }
-    }
-
-    playBellPattern(eventName);
 }
 
 function normalizeJid(value) {
@@ -3217,7 +3143,6 @@ async function handleIncomingCalls(sock, calls = []) {
                     touchSignalHealth('autoBlock', call?.isVideo ? 'video' : 'voice');
                     recordAudit('call_blocked', { from: blockTarget, status: call.status || '', isVideo: call.isVideo === true }, 'warn');
                     logCall(call, identity, 'BLOCK');
-                    playSound('callBlocked');
                 }
                 if (actions.includes('BLOCK')) recordBlockedCaller(identity, call, actions);
                 if (ANTI_CALL_NOTIFY_TELEGRAM && actions.length > 0) await sendTelegramText(buildCallNotification(identity, call, actions));
@@ -3719,7 +3644,6 @@ async function connectToWhatsApp() {
                 logWaConnected();
                 flushPostConnectSystemMessages();
                 flushPreConnectEventBuffers(sock);
-                playSound('connected');
             }
 
             if (connection === 'close') {
@@ -3747,7 +3671,6 @@ async function connectToWhatsApp() {
                 recordAudit('connection_close', { statusCode, shouldReconnect }, shouldReconnect ? 'warn' : 'error');
                 if (shouldReconnect) incrementMetric('reconnects', 1);
                 logError('WA disconnected', `reconnect=${shouldReconnect}`);
-                playSound('disconnected');
                 if (shouldReconnect) {
                     scheduleReconnect();
                 } else {
