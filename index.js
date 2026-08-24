@@ -105,7 +105,6 @@ const KEEP_ONLINE_ENABLED = CONNECTION.keepOnline === true;
 const KEEP_ALIVE_INTERVAL_MS = Math.max(15000, Number(CONNECTION.keepAliveIntervalSeconds || 90) * 1000);
 const RECONNECT_DELAY_MS = Math.max(3000, Number(CONNECTION.reconnectDelaySeconds || 6) * 1000);
 const SYNC_FULL_HISTORY_ON_CONNECT = CONNECTION.syncFullHistoryOnConnect !== false;
-const PENDING_NOTIFICATIONS_TIMEOUT_MS = Math.max(5000, Number(STATUS.pendingNotificationsTimeoutSeconds || CONNECTION.pendingNotificationsTimeoutSeconds || 20) * 1000);
 const PRIVACY_HARDENING_ENABLED = PRIVACY.enabled !== false;
 const PRIVACY_LAST_SEEN = String(PRIVACY.lastSeen || 'none');
 const PRIVACY_ONLINE = String(PRIVACY.online || 'match_last_seen');
@@ -130,6 +129,7 @@ const ANTI_CALL_BUSY_MESSAGE_VIDEO = String(ANTI_CALL.busyMessageVideo || ANTI_C
 const BLOCKED_CALL_STORE_FILE = path.join(__dirname, ANTI_CALL.blockedCallStoreFile || 'blocked-callers.json');
 
 const STATUS = config.statusForwarder || {};
+const PENDING_NOTIFICATIONS_TIMEOUT_MS = Math.max(5000, Number(STATUS.pendingNotificationsTimeoutSeconds || CONNECTION.pendingNotificationsTimeoutSeconds || 20) * 1000);
 const ALLOWED_MEDIA_TYPES = Array.isArray(STATUS.allowedMediaTypes)
     ? STATUS.allowedMediaTypes
     : ['image', 'video', 'audio', 'document', 'sticker'];
