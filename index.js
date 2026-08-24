@@ -123,9 +123,9 @@ const ANTI_CALL_AUTO_BLOCK_CALLER = ANTI_CALL.autoBlockCaller === true;
 const ANTI_CALL_BLOCK_DELAY_MS = Math.max(0, Number(ANTI_CALL.blockDelayMs || 0));
 const ANTI_CALL_SEND_BUSY_MESSAGE = ANTI_CALL.sendBusyMessage === true;
 const ANTI_CALL_NOTIFY_TELEGRAM = ANTI_CALL.notifyTelegram === true;
-const ANTI_CALL_BUSY_MESSAGE = String(ANTI_CALL.busyMessage || 'Mohon maaf, panggilan WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.');
-const ANTI_CALL_BUSY_MESSAGE_VOICE = String(ANTI_CALL.busyMessageVoice || ANTI_CALL_BUSY_MESSAGE || 'Mohon maaf, panggilan suara WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.');
-const ANTI_CALL_BUSY_MESSAGE_VIDEO = String(ANTI_CALL.busyMessageVideo || ANTI_CALL_BUSY_MESSAGE || 'Mohon maaf, panggilan video WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.');
+const ANTI_CALL_BUSY_MESSAGE = String(ANTI_CALL.busyMessage || 'Mohon maaf, panggilan suara WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.');
+const ANTI_CALL_BUSY_MESSAGE_VOICE = String(ANTI_CALL.busyMessageVoice || ANTI_CALL_BUSY_MESSAGE || 'Mohon maaf, panggilan suara WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.');
+const ANTI_CALL_BUSY_MESSAGE_VIDEO = String(ANTI_CALL.busyMessageVideo || ANTI_CALL_BUSY_MESSAGE || 'Mohon maaf, panggilan video WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.');
 const BLOCKED_CALL_STORE_FILE = path.join(__dirname, ANTI_CALL.blockedCallStoreFile || 'blocked-callers.json');
 
 const STATUS = config.statusForwarder || {};
@@ -136,7 +136,7 @@ const ALLOWED_MEDIA_TYPES = Array.isArray(STATUS.allowedMediaTypes)
     ? STATUS.allowedMediaTypes
     : ['image', 'video', 'audio', 'document', 'sticker'];
 const AUTO_LIKE_STATUS = STATUS.autoLikeStatus !== false;
-const AUTO_LIKE_EMOJI = String(STATUS.autoLikeEmoji || '🔥️').normalize('NFC').trim();
+const AUTO_LIKE_EMOJI = String(STATUS.autoLikeEmoji || '💚️').normalize('NFC').trim();
 const LIKE_RETRIES = Math.max(0, Number(STATUS.likeRetries || 1));
 const LIKE_VERIFICATION_ENABLED = STATUS.likeVerificationEnabled !== false;
 const LIKE_VERIFICATION_TIMEOUT_MS = Math.max(1000, Number(STATUS.likeVerificationTimeoutSeconds || 8) * 1000);

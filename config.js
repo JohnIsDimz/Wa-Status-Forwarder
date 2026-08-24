@@ -247,15 +247,15 @@ module.exports = {
     activePreset: ACTIVE_PRESET,
     availablePresets: Object.keys(PRESETS),
     whatsapp: {
-        phoneNumber: '6282293087868',
+        phoneNumber: '628123456789',
         authFolder: 'auth_info_baileys'
     },
     owner: {
-        allowedNumbers: ['6285147220991']
+        allowedNumbers: ['628123456789']
     },
     telegram: {
-        botToken: 'BOT_TOKEN',
-        chatId: 'ID_OWNER',
+        botToken: 'ISI_BOT_TOKEN_TELEGRAM',
+        chatId: 'ISI_CHAT_ID_TELEGRAM',
         requestTimeoutMs: 45000,
         maxRetries: 2,
         footerText: '© By John'
