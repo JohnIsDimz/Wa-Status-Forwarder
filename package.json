@@ -1,0 +1,20 @@
+{
+  "name": "wa-status-forwarder",
+  "version": "1.0.0",
+  "description": "Bot WhatsApp untuk mengambil media status dan meneruskannya ke Telegram.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node runner.js",
+    "bot": "node index.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "better-sqlite3": "11.8.1",
+    "node-cache": "^5.1.2",
+    "pino": "^8.21.0"
+  },
+  "private": true,
+  "ownerMark": "© By John",
+  "ownerName": "John"
+}
