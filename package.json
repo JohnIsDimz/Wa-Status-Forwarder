@@ -5,14 +5,20 @@
   "main": "index.js",
   "scripts": {
     "start": "node runner.js",
-    "bot": "node index.js"
+    "bot": "node index.js",
+    "check": "node --check index.js && node --check node.js && node --check runner.js && node --check config.js && node --check db-helper.js",
+    "test": "npm run check"
   },
   "dependencies": {
-    "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "^7.0.0-rc13",
-    "better-sqlite3": "11.8.1",
-    "node-cache": "^5.1.2",
-    "pino": "^8.21.0"
+    "@hapi/boom": "10.0.1",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "better-sqlite3": "13.0.3",
+    "node-cache": "5.1.2",
+    "pino": "10.3.1"
+  },
+  "engines": {
+    "node": ">=26.0.0",
+    "npm": ">=11.0.0"
   },
   "private": true,
   "ownerMark": "© By John",

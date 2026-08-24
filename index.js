@@ -1,12 +1,28 @@
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    downloadMediaMessage,
-    Browsers
-} = require('@whiskeysockets/baileys');
+let makeWASocket;
+let useMultiFileAuthState;
+let DisconnectReason;
+let fetchLatestBaileysVersion;
+let makeCacheableSignalKeyStore;
+let downloadMediaMessage;
+let Browsers;
+let baileysLoadPromise;
+
+async function loadBaileys() {
+    if (!baileysLoadPromise) {
+        baileysLoadPromise = import('@whiskeysockets/baileys').then((module) => {
+            makeWASocket = module.default;
+            useMultiFileAuthState = module.useMultiFileAuthState;
+            DisconnectReason = module.DisconnectReason;
+            fetchLatestBaileysVersion = module.fetchLatestBaileysVersion;
+            makeCacheableSignalKeyStore = module.makeCacheableSignalKeyStore;
+            downloadMediaMessage = module.downloadMediaMessage;
+            Browsers = module.Browsers;
+            return module;
+        });
+    }
+    return baileysLoadPromise;
+}
+
 const { Boom } = require('@hapi/boom');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -3606,6 +3622,7 @@ async function connectToWhatsApp() {
     }
 
     connectJob = (async () => {
+        await loadBaileys();
         validateConfig();
         restoreAuthFromBackupIfNeeded();
         showStartupBanner();
