@@ -10,6 +10,37 @@ Implementasi saat ini menyediakan pemantauan status WhatsApp, pemrosesan gambar,
 
 Notifikasi suara lokal sudah dihapus sepenuhnya. Bot tidak lagi membutuhkan file MP3, program pemutar suara, terminal bell, atau akses audio server.
 
+## Penguatan penangkapan sinyal status
+
+Pipeline capture sekarang menggunakan pendekatan **Node.js-only** tanpa Docker dan tanpa aplikasi GUI. Event `messages.upsert` dibedakan antara `notify` sebagai sinyal realtime dan `append` sebagai history/backfill. Batch `messaging-history.set` tetap diproses untuk menangkap status yang masuk ketika server sempat offline. Baileys mendokumentasikan bahwa history dikirim dalam beberapa batch dan bahwa `receivedPendingNotifications` menandai koneksi sudah menyelesaikan catch-up. [7]
+
+Perubahan penguatan yang sudah diterapkan adalah sebagai berikut.
+
+| Mekanisme | Perilaku |
+|---|---|
+| `messages.upsert` | Menangkap event realtime `notify` dan history `append` dengan jalur prioritas yang berbeda |
+| `messaging-history.set` | Menyimpan batch history sebelum proses enqueue sehingga status tidak hilang saat fase catch-up |
+| `receivedPendingNotifications` | Menunda pemrosesan normal sampai offline notification selesai dikirim |
+| Fallback catch-up | Jika event penanda tidak datang, bot otomatis membuka pipeline setelah timeout terkonfigurasi |
+| `getMessage` | Snapshot pesan disediakan ke Baileys untuk retry dekripsi dan pemulihan pesan |
+| `messages.update` | Membangun kembali status dari snapshot ketika update tidak membawa payload message lengkap |
+| Reconnect queue | Job berisi payload pesan dipertahankan sementara dan di-enqueue kembali ke socket baru |
+| History filter | Status history yang lebih tua dari `historyStatusMaxAgeHours` tidak diteruskan |
+| Deduplikasi | Message ID, remote JID, participant, content signature, SQLite, dan queue key dipakai bersama |
+
+Baileys bersifat stateless dan tidak menyimpan message store permanen, sehingga aplikasi memang perlu menyediakan store sendiri untuk retry, history, dan state kontak. [8] Implementasi saat ini memakai cache bounded di memory untuk snapshot cepat dan SQLite untuk deduplikasi. Untuk volume besar atau multi-worker, queue persisten Redis/BullMQ tetap menjadi tahap lanjutan, bukan dependency wajib saat ini.
+
+Parameter capture tersedia pada setiap preset di `config.js`:
+
+```js
+historyCaptureEnabled: true,
+historyStatusMaxAgeHours: 24,
+messageCacheLimit: 5000,
+reconnectQueueRetentionMinutes: 30,
+pendingNotificationsTimeoutSeconds: 20,
+messageUpdateFallback: true
+```
+
 ## Arsitektur saat ini
 
 ```mermaid
@@ -84,7 +115,7 @@ Konfigurasi yang paling sering disesuaikan adalah sebagai berikut.
 | `whatsapp` | Nomor pairing dan direktori sesi |
 | `telegram` | Token bot, chat tujuan, timeout, retry, dan footer caption |
 | `connection` | Reconnect, keep-online, sinkronisasi history, privacy, dan anti-call |
-| `statusForwarder` | Jenis media, queue, deduplikasi, batas ukuran, delay, dan rate limit |
+| `statusForwarder` | Jenis media, queue, deduplikasi, batas ukuran, delay, rate limit, dan capture history |
 | `operations` | Lokasi audit, metrics, health state, backup sesi, serta interval pemeriksaan |
 | `console` | Mode log dan detail log pengiriman, like, serta panggilan |
 
@@ -167,10 +198,9 @@ Dua pola deployment yang layak dipakai adalah sebagai berikut.
 | Approach | Tradeoffs | Cost | Setup Complexity |
 |---|---|---|---|
 | `systemd` pada VPS | Ringan, native Linux, mudah memakai volume lokal; konfigurasi bergantung pada OS server | Biaya VPS yang digunakan | Rendah–menengah |
-| Docker Compose | Reproducible, dependency dan healthcheck lebih mudah dipaketkan; perlu memahami volume dan lifecycle container | Biaya VPS yang digunakan | Menengah |
 | Process manager seperti PM2 | Praktis untuk restart, log, dan startup; menambah satu lapisan tooling | Biaya VPS yang digunakan | Rendah–menengah |
 
-Untuk satu instance dengan SQLite, `systemd` atau PM2 sudah cukup. Docker Compose lebih tepat jika ingin deployment yang konsisten antara development, staging, dan production. Docker Compose mendukung `healthcheck`, dependency antarlayanan, dan kondisi `service_healthy`, sehingga cocok ketika kelak bot memakai Redis atau PostgreSQL. [6]
+Untuk satu instance dengan SQLite, `systemd` atau PM2 sudah cukup. Keduanya menjalankan proses Node.js langsung di host, sehingga tidak ada lapisan container yang perlu dipelihara. Untuk deployment production, `systemd` direkomendasikan sebagai baseline karena tersedia pada Linux dan dapat menjalankan restart policy, environment variable, serta log melalui journal.
 
 Contoh unit `systemd` minimal:
 
@@ -253,7 +283,7 @@ Tambahkan unit test untuk parser status, formatter caption, deduplikasi, rate li
 
 Telegram Bot API cocok untuk mengirim media dan caption secara otomatis. Untuk penerimaan update Telegram, gunakan webhook atau long polling; keduanya saling eksklusif dan update Telegram memiliki masa penyimpanan terbatas. [3]
 
-WhatsApp Cloud API resmi perlu diperlakukan sebagai integrasi berbeda, bukan pengganti langsung Baileys untuk fungsi membaca status personal. Jika kebutuhan berubah menjadi business messaging resmi, inbound webhook, template message, dan pengiriman pesan ke pelanggan, Cloud API layak dievaluasi melalui dokumentasi resmi Meta. Untuk fungsi inti proyek saat ini—mendeteksi dan meneruskan status WhatsApp—Baileys tetap merupakan komponen yang digunakan dan perlu dipantau terhadap perubahan protokol serta kebijakan WhatsApp. [7]
+WhatsApp Cloud API resmi perlu diperlakukan sebagai integrasi berbeda, bukan pengganti langsung Baileys untuk fungsi membaca status personal. Jika kebutuhan berubah menjadi business messaging resmi, inbound webhook, template message, dan pengiriman pesan ke pelanggan, Cloud API layak dievaluasi melalui dokumentasi resmi Meta. Untuk fungsi inti proyek saat ini—mendeteksi dan meneruskan status WhatsApp—Baileys tetap merupakan komponen yang digunakan dan perlu dipantau terhadap perubahan protokol serta kebijakan WhatsApp. [6]
 
 ## Troubleshooting
 
@@ -300,6 +330,8 @@ Versi dependency dikunci di `package-lock.json`. Jalankan `npm outdated` dan `np
 
 [5]: https://docs.bullmq.io/ "BullMQ Documentation"
 
-[6]: https://docs.docker.com/reference/compose-file/services/ "Docker Compose Services Reference"
+[6]: https://whatsappbusiness.com/developers/developer-hub/ "WhatsApp Business Developer Hub"
 
-[7]: https://whatsappbusiness.com/developers/developer-hub/ "WhatsApp Business Developer Hub"
+[7]: https://baileys.wiki/concepts/events "Baileys Events"
+
+[8]: https://baileys.wiki/concepts/data-store "Baileys Data Store"

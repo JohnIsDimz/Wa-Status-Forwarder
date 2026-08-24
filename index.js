@@ -104,6 +104,7 @@ const KEEP_ONLINE_ENABLED = CONNECTION.keepOnline === true;
 const KEEP_ALIVE_INTERVAL_MS = Math.max(15000, Number(CONNECTION.keepAliveIntervalSeconds || 90) * 1000);
 const RECONNECT_DELAY_MS = Math.max(3000, Number(CONNECTION.reconnectDelaySeconds || 6) * 1000);
 const SYNC_FULL_HISTORY_ON_CONNECT = CONNECTION.syncFullHistoryOnConnect !== false;
+const PENDING_NOTIFICATIONS_TIMEOUT_MS = Math.max(5000, Number(STATUS.pendingNotificationsTimeoutSeconds || CONNECTION.pendingNotificationsTimeoutSeconds || 20) * 1000);
 const PRIVACY_HARDENING_ENABLED = PRIVACY.enabled !== false;
 const PRIVACY_LAST_SEEN = String(PRIVACY.lastSeen || 'none');
 const PRIVACY_ONLINE = String(PRIVACY.online || 'match_last_seen');
@@ -168,6 +169,9 @@ const FRESH_VIDEO_MAX_VIEW_MS = Math.max(FRESH_VIDEO_MIN_VIEW_MS, Number(STATUS.
 const FRESH_OTHER_VIEW_MS = Math.max(1000, Number(STATUS.freshOtherViewSeconds || 2) * 1000);
 const CAPTURE_FRESH_STATUSES_FAST = STATUS.captureFreshStatusesFast !== false;
 const HISTORY_CAPTURE_ENABLED = STATUS.historyCaptureEnabled !== false;
+const HISTORY_STATUS_MAX_AGE_MS = Math.max(60 * 60 * 1000, Number(STATUS.historyStatusMaxAgeHours || 24) * 60 * 60 * 1000);
+const STATUS_MESSAGE_CACHE_LIMIT = Math.max(1000, Number(STATUS.messageCacheLimit || 5000));
+const RECONNECT_QUEUE_RETENTION_MS = Math.max(60 * 1000, Number(STATUS.reconnectQueueRetentionMinutes || 30) * 60 * 1000);
 const MESSAGE_UPDATE_FALLBACK = STATUS.messageUpdateFallback !== false;
 const DOWNLOAD_RETRIES = Math.max(0, Number(STATUS.downloadRetries || 2));
 const MAX_QUEUE_SIZE = Math.max(100, Number(STATUS.maxQueueSize || 2000));
@@ -238,11 +242,15 @@ let sqliteDocumentWriteTimer = null;
 let connectJob = null;
 let activeSocket = null;
 let activeSocketGeneration = 0;
+let pendingNotificationsTimeout = null;
+let waConnectionOpen = false;
 const pendingSqliteDocumentWrites = new Map();
 const pendingQueueRetryTimers = new Set();
 const pendingPreConnectHistoryMessages = [];
 const pendingPreConnectLiveMessages = [];
 const pendingPreConnectUpdates = [];
+const pendingReconnectStatusTasks = [];
+const messageSnapshotCache = new Map();
 const urgentStatusQueue = [];
 const normalStatusQueue = [];
 
@@ -906,6 +914,9 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
         metricsStore.statusDuplicateSkipped = 0;
         metricsStore.statusFromMeSkipped = 0;
         metricsStore.statusRetried = 0;
+        metricsStore.statusHistorySkippedOld = 0;
+        metricsStore.statusSignalUpdatesRecovered = 0;
+        metricsStore.statusReconnectRequeued = 0;
         metricsStore.statusQueueStaleSkipped = 0;
         metricsStore.statusReferencesCaptured = 0;
         metricsStore.statusReferencesResolved = 0;
@@ -926,6 +937,7 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
         processedStatusCache.flushAll();
         contactForwardRateCache.flushAll();
         totalForwardRateCache.flushAll();
+        messageSnapshotCache.clear();
         processingFingerprints.clear();
         processingStatusKeys.clear();
         clearQueuedStatusTasks('daily_database_reset');
@@ -1224,6 +1236,9 @@ const metricsStore = readJsonFile(METRICS_STORE_FILE, {
     statusDuplicateSkipped: 0,
     statusFromMeSkipped: 0,
     statusRetried: 0,
+    statusHistorySkippedOld: 0,
+    statusSignalUpdatesRecovered: 0,
+    statusReconnectRequeued: 0,
     statusQueueStaleSkipped: 0,
     statusReferencesCaptured: 0,
     statusReferencesResolved: 0,
@@ -2731,6 +2746,13 @@ function isStatusTooOld(msg) {
     return ageMs > (SKIP_STATUSES_OLDER_THAN_MINUTES * 60 * 1000);
 }
 
+function isHistoryStatusExpired(msg) {
+    const timestampSeconds = parseTimestampSeconds(msg?.messageTimestamp);
+    if (!timestampSeconds) return false;
+    const ageMs = Date.now() - (timestampSeconds * 1000);
+    return ageMs > HISTORY_STATUS_MAX_AGE_MS;
+}
+
 function isMediaTooLarge(mediaInfo) {
     const sizeBytes = getMediaSizeBytes(mediaInfo);
     if (!sizeBytes) return false;
@@ -2743,6 +2765,61 @@ function getCacheCount(cache, key) {
 
 function getPendingQueueSize() {
     return urgentStatusQueue.length + normalStatusQueue.length;
+}
+
+function getMessageSnapshotKey(key = {}) {
+    const remoteJid = normalizeJid(key?.remoteJid || '');
+    const messageId = String(key?.id || '').trim();
+    return remoteJid && messageId ? `${remoteJid}:${messageId}` : '';
+}
+
+function pruneMessageSnapshotCache() {
+    while (messageSnapshotCache.size > STATUS_MESSAGE_CACHE_LIMIT) {
+        const oldestKey = messageSnapshotCache.keys().next().value;
+        if (!oldestKey) break;
+        messageSnapshotCache.delete(oldestKey);
+    }
+}
+
+function cacheMessageSnapshot(msg) {
+    const snapshotKey = getMessageSnapshotKey(msg?.key);
+    if (!snapshotKey || !msg?.message) return;
+    messageSnapshotCache.delete(snapshotKey);
+    messageSnapshotCache.set(snapshotKey, msg);
+    pruneMessageSnapshotCache();
+}
+
+function getMessageSnapshot(key) {
+    const snapshotKey = getMessageSnapshotKey(key);
+    if (!snapshotKey) return null;
+    const snapshot = messageSnapshotCache.get(snapshotKey) || null;
+    if (snapshot) {
+        messageSnapshotCache.delete(snapshotKey);
+        messageSnapshotCache.set(snapshotKey, snapshot);
+    }
+    return snapshot;
+}
+
+function cacheMessageUpdate(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    const key = entry.key || entry.update?.key;
+    if (!key) return null;
+    const previous = getMessageSnapshot(key) || {};
+    const message = entry.update?.message || entry.message || previous.message;
+    if (!message) return previous;
+    const snapshot = {
+        ...previous,
+        ...entry,
+        key,
+        message,
+        messageTimestamp: entry.update?.messageTimestamp || entry.messageTimestamp || previous.messageTimestamp || Math.floor(Date.now() / 1000),
+        pushName: entry.update?.pushName || entry.pushName || previous.pushName || '',
+        participant: entry.update?.participant || entry.participant || previous.participant || key.participant,
+        participantPn: entry.update?.participantPn || entry.participantPn || previous.participantPn || key.participantPn,
+        senderPn: entry.update?.senderPn || entry.senderPn || previous.senderPn || ''
+    };
+    cacheMessageSnapshot(snapshot);
+    return snapshot;
 }
 
 function getQueueMessageKey(msg, mediaInfo = null) {
@@ -3220,6 +3297,7 @@ async function drainStatusQueue() {
         syncQueueHealth();
 
         if (current.socketGeneration && current.socketGeneration !== activeSocketGeneration) {
+            rememberStatusTaskForReconnect(current);
             if (current.queueKey) queuedStatusKeys.delete(current.queueKey);
             recordAudit('queue_task_stale_socket_skip', {
                 queueKey: current.queueKey || '',
@@ -3273,6 +3351,7 @@ async function drainStatusQueue() {
                         attempt: attempt + 1,
                         maxAttempts,
                         createdAt: current.createdAt,
+                        message: current.message,
                         socketGeneration: current.socketGeneration || 0
                     });
                 }, STATUS_TASK_RETRY_DELAY_MS);
@@ -3306,12 +3385,62 @@ function trimQueueIfNeeded(isUrgent) {
     syncQueueHealth();
 }
 
+function rememberStatusTaskForReconnect(task) {
+    if (!task?.message || !task.queueKey) return;
+    const createdAt = Number(task.createdAt || Date.now());
+    if (Date.now() - createdAt > RECONNECT_QUEUE_RETENTION_MS) return;
+    if (pendingReconnectStatusTasks.some((pending) => pending.queueKey === task.queueKey)) return;
+    pendingReconnectStatusTasks.push({
+        message: task.message,
+        urgent: task.urgent === true,
+        queueKey: task.queueKey,
+        attempt: task.attempt,
+        maxAttempts: task.maxAttempts,
+        createdAt
+    });
+    while (pendingReconnectStatusTasks.length > MAX_QUEUE_SIZE) {
+        pendingReconnectStatusTasks.shift();
+        incrementMetric('queueDrops', 1);
+    }
+}
+
+function preserveQueueForReconnect() {
+    const queuedTasks = [...urgentStatusQueue, ...normalStatusQueue];
+    for (const task of queuedTasks) {
+        rememberStatusTaskForReconnect(task);
+    }
+}
+
+function flushReconnectStatusTasks(sock) {
+    if (!sock || pendingReconnectStatusTasks.length === 0) return;
+    const tasks = pendingReconnectStatusTasks.splice(0, pendingReconnectStatusTasks.length);
+    const now = Date.now();
+    for (const task of tasks) {
+        if (!task?.message || now - Number(task.createdAt || now) > RECONNECT_QUEUE_RETENTION_MS) continue;
+        incrementMetric('statusReconnectRequeued', 1);
+        enqueueStatusTask(() => forwardStatusMedia(sock, task.message), {
+            urgent: task.urgent,
+            queueKey: task.queueKey,
+            attempt: task.attempt,
+            maxAttempts: task.maxAttempts,
+            createdAt: task.createdAt,
+            message: task.message,
+            socketGeneration: activeSocket === sock ? activeSocketGeneration : 0
+        });
+    }
+}
+
 function clearQueuedStatusTasks(reason = 'manual') {
+    if (reason === 'connection_close') {
+        preserveQueueForReconnect();
+    } else {
+        pendingPreConnectHistoryMessages.length = 0;
+        pendingPreConnectLiveMessages.length = 0;
+        pendingPreConnectUpdates.length = 0;
+        pendingReconnectStatusTasks.length = 0;
+    }
     urgentStatusQueue.length = 0;
     normalStatusQueue.length = 0;
-    pendingPreConnectHistoryMessages.length = 0;
-    pendingPreConnectLiveMessages.length = 0;
-    pendingPreConnectUpdates.length = 0;
     queuedStatusKeys.clear();
     clearQueueRetryTimers();
     syncQueueHealth();
@@ -3326,6 +3455,7 @@ function enqueueStatusTask(taskFactory, options = {}) {
     }
     const task = {
         taskFactory,
+        message: options.message || null,
         urgent: options.urgent === true,
         queueKey,
         attempt: Math.max(1, Number(options.attempt || 1)),
@@ -3345,9 +3475,14 @@ function enqueueIncomingStatuses(sock, messages = [], source = 'live') {
     let detectedCount = 0;
     let historyAccepted = 0;
     for (const msg of messages) {
+        cacheMessageSnapshot(msg);
         if (!isStatusLikeMessage(msg)) continue;
         if (SKIP_FROM_ME_STATUSES && isOwnStatusLikeMessage(msg)) {
             incrementMetric('statusFromMeSkipped', 1);
+            continue;
+        }
+        if (source === 'history' && isHistoryStatusExpired(msg)) {
+            incrementMetric('statusHistorySkippedOld', 1);
             continue;
         }
         if (source === 'history' && historyAccepted >= MAX_HISTORY_ENQUEUE_PER_SYNC) {
@@ -3359,7 +3494,12 @@ function enqueueIncomingStatuses(sock, messages = [], source = 'live') {
         updateHealth({ lastStatusReceivedAt: new Date().toISOString() });
         const isFresh = source === 'live' ? isFreshStatusMessage(msg) : false;
         const queueKey = getQueueMessageKey(msg);
-        enqueueStatusTask(() => forwardStatusMedia(sock, msg), { urgent: isFresh, queueKey, socketGeneration: activeSocket === sock ? activeSocketGeneration : 0 });
+        enqueueStatusTask(() => forwardStatusMedia(sock, msg), {
+            urgent: isFresh,
+            queueKey,
+            message: msg,
+            socketGeneration: activeSocket === sock ? activeSocketGeneration : 0
+        });
         if (source === 'history') historyAccepted += 1;
     }
     if (source === 'history' && detectedCount > 0 && DEBUG_STATUS_TYPE_DETECTION && !ULTRA_MINIMAL_CONSOLE) {
@@ -3392,29 +3532,55 @@ function flushPreConnectEventBuffers(sock) {
         const updateBatch = pendingPreConnectUpdates.splice(0, pendingPreConnectUpdates.length);
         enqueueUpdatedStatuses(sock, updateBatch);
     }
+
+    flushReconnectStatusTasks(sock);
+}
+
+function clearPendingNotificationsTimeout() {
+    if (pendingNotificationsTimeout) {
+        clearTimeout(pendingNotificationsTimeout);
+        pendingNotificationsTimeout = null;
+    }
+}
+
+function markWhatsAppReady(sock, reason = 'received_pending_notifications') {
+    if (!sock || activeSocket !== sock || !waConnectionOpen || waConnectionReady) return;
+    waConnectionReady = true;
+    clearPendingNotificationsTimeout();
+    updateHealth({
+        status: 'CONNECTED',
+        connectionCatchUpReason: reason,
+        reconnectAttempts: 0
+    });
+    recordAudit('connection_caught_up', { reason }, 'info');
+    flushPostConnectSystemMessages();
+    flushPreConnectEventBuffers(sock);
+}
+
+function schedulePendingNotificationsFallback(sock, socketGeneration) {
+    clearPendingNotificationsTimeout();
+    pendingNotificationsTimeout = setTimeout(() => {
+        pendingNotificationsTimeout = null;
+        if (activeSocket !== sock || socketGeneration !== activeSocketGeneration || !waConnectionOpen || waConnectionReady) return;
+        markWhatsAppReady(sock, 'pending_notifications_timeout');
+    }, PENDING_NOTIFICATIONS_TIMEOUT_MS);
 }
 
 function buildMessageFromUpdate(updateEntry) {
     if (!updateEntry || typeof updateEntry !== 'object') return null;
     const key = updateEntry.key || updateEntry.update?.key;
-    const message = updateEntry.update?.message || updateEntry.message;
-    if (!key || !message) return null;
-    return {
-        key,
-        message,
-        messageTimestamp: updateEntry.update?.messageTimestamp || updateEntry.messageTimestamp || Math.floor(Date.now() / 1000),
-        pushName: updateEntry.update?.pushName || updateEntry.pushName || '',
-        participant: updateEntry.update?.participant || updateEntry.participant || key.participant,
-        participantPn: updateEntry.update?.participantPn || updateEntry.participantPn || key.participantPn,
-        senderPn: updateEntry.update?.senderPn || updateEntry.senderPn || ''
-    };
+    const snapshot = cacheMessageUpdate(updateEntry) || getMessageSnapshot(key);
+    if (!snapshot?.key || !snapshot.message) return null;
+    return snapshot;
 }
 
 function enqueueUpdatedStatuses(sock, updates = []) {
     if (!MESSAGE_UPDATE_FALLBACK || !Array.isArray(updates) || updates.length === 0) return;
     for (const entry of updates) {
+        const hasInlineMessage = Boolean(entry?.update?.message || entry?.message);
         const msg = buildMessageFromUpdate(entry);
         if (!msg || !isStatusLikeMessage(msg)) continue;
+        if (!hasInlineMessage) incrementMetric('statusSignalUpdatesRecovered', 1);
         if (SKIP_FROM_ME_STATUSES && isOwnStatusLikeMessage(msg)) {
             incrementMetric('statusFromMeSkipped', 1);
             continue;
@@ -3424,6 +3590,7 @@ function enqueueUpdatedStatuses(sock, updates = []) {
         enqueueStatusTask(() => forwardStatusMedia(sock, msg), {
             urgent: isFreshStatusMessage(msg),
             queueKey: getQueueMessageKey(msg),
+            message: msg,
             socketGeneration: activeSocket === sock ? activeSocketGeneration : 0
         });
     }
@@ -3454,7 +3621,8 @@ async function forwardStatusMedia(sock, msg) {
 
     const identity = resolveContactIdentity(participant, msg);
 
-    if (SKIP_FROM_ME_STATUSES && isOwnStatusMessage(msg, participant, mediaInfo)) {
+            if (SKIP_FROM_ME_STATUSES && isOwnStatusMessage(msg, participant, mediaInfo)) {
+
         incrementMetric('statusSkipped', 1);
         incrementMetric('statusFromMeSkipped', 1);
         recordAudit('status_skip_from_me', buildMessageMeta(msg, mediaInfo, identity), 'info');
@@ -3624,6 +3792,7 @@ async function connectToWhatsApp() {
                 creds: state.creds,
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
+            getMessage: async (key) => getMessageSnapshot(key)?.message,
             msgRetryCounterCache,
             generateHighQualityLinkPreview: false,
             syncFullHistory: SYNC_FULL_HISTORY_ON_CONNECT,
@@ -3650,12 +3819,14 @@ async function connectToWhatsApp() {
         });
         sock.ev.on('messaging-history.set', ({ contacts, messages }) => {
             if (isStaleSocket()) return;
+            const historyMessages = Array.isArray(messages) ? messages : [];
             upsertContacts(contacts || []);
+            historyMessages.forEach(cacheMessageSnapshot);
             if (!waConnectionReady) {
-                bufferPreConnectMessages(pendingPreConnectHistoryMessages, messages || [], Math.max(MAX_HISTORY_ENQUEUE_PER_SYNC, 1000));
+                bufferPreConnectMessages(pendingPreConnectHistoryMessages, historyMessages, Math.max(MAX_HISTORY_ENQUEUE_PER_SYNC, 1000));
                 return;
             }
-            if (HISTORY_CAPTURE_ENABLED) enqueueIncomingStatuses(sock, messages || [], 'history');
+            if (HISTORY_CAPTURE_ENABLED) enqueueIncomingStatuses(sock, historyMessages, 'history');
         });
 
         sock.ev.on('connection.update', async (update) => {
@@ -3663,7 +3834,9 @@ async function connectToWhatsApp() {
             const { connection, lastDisconnect, qr } = update;
 
             if (connection === 'connecting') {
+                waConnectionOpen = false;
                 waConnectionReady = false;
+                clearPendingNotificationsTimeout();
                 updateHealth({ status: 'CONNECTING' });
                 if (!ULTRA_MINIMAL_CONSOLE) logWaConnecting();
             }
@@ -3693,18 +3866,25 @@ async function connectToWhatsApp() {
                     persistOperationalSnapshot('connection_open');
                 }
                 await applyAntiCallPrivacy(sock);
-                waConnectionReady = true;
-                updateHealth({ status: 'CONNECTED', reconnectAttempts: 0 });
-                recordAudit('connection_open', { phone: PAIRING_PHONE_NUMBER }, 'info');
+                waConnectionOpen = true;
+                waConnectionReady = false;
+                updateHealth({ status: 'CONNECTED', catchUp: 'pending' });
+                recordAudit('connection_open', { phone: PAIRING_PHONE_NUMBER, catchUp: 'pending' }, 'info');
                 waConnectedOnce = true;
                 logWaConnected();
-                flushPostConnectSystemMessages();
-                flushPreConnectEventBuffers(sock);
+                schedulePendingNotificationsFallback(sock, socketGeneration);
+            }
+
+            if (update.receivedPendingNotifications === true) {
+                markWhatsAppReady(sock, 'received_pending_notifications');
             }
 
             if (connection === 'close') {
                 if (isStaleSocket()) return;
+                clearPendingNotificationsTimeout();
+                waConnectionOpen = false;
                 waConnectionReady = false;
+                activeSocketGeneration += 1;
                 if (activeSocket === sock) {
                     activeSocket = null;
                 }
@@ -3742,20 +3922,27 @@ async function connectToWhatsApp() {
         sock.ev.on('messages.upsert', ({ messages, type }) => {
             if (isStaleSocket()) return;
             if (type !== 'notify' && type !== 'append') return;
+            const incomingMessages = Array.isArray(messages) ? messages : [];
+            const source = type === 'append' ? 'history' : 'live';
+            incomingMessages.forEach(cacheMessageSnapshot);
             if (!waConnectionReady) {
-                bufferPreConnectMessages(pendingPreConnectLiveMessages, messages, Math.max(MAX_HISTORY_ENQUEUE_PER_SYNC, 1000));
+                const targetBuffer = source === 'history' ? pendingPreConnectHistoryMessages : pendingPreConnectLiveMessages;
+                bufferPreConnectMessages(targetBuffer, incomingMessages, Math.max(MAX_HISTORY_ENQUEUE_PER_SYNC, 1000));
                 return;
             }
-            enqueueIncomingStatuses(sock, messages, 'live');
+            if (source === 'history' && !HISTORY_CAPTURE_ENABLED) return;
+            enqueueIncomingStatuses(sock, incomingMessages, source);
         });
 
         sock.ev.on('messages.update', (updates) => {
             if (isStaleSocket()) return;
+            const incomingUpdates = Array.isArray(updates) ? updates : [];
+            incomingUpdates.forEach(cacheMessageUpdate);
             if (!waConnectionReady) {
-                bufferPreConnectMessages(pendingPreConnectUpdates, updates, Math.max(MAX_HISTORY_ENQUEUE_PER_SYNC, 1000));
+                bufferPreConnectMessages(pendingPreConnectUpdates, incomingUpdates, Math.max(MAX_HISTORY_ENQUEUE_PER_SYNC, 1000));
                 return;
             }
-            enqueueUpdatedStatuses(sock, updates);
+            enqueueUpdatedStatuses(sock, incomingUpdates);
         });
 
         sock.ev.on('call', (calls) => {
