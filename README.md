@@ -171,6 +171,20 @@ busyMessageVideo: 'Mohon maaf, panggilan video WhatsApp otomatis ditolak karena 
 
 Jika panggilan berasal dari grup, panggilan tetap ditolak tetapi bot tidak mengirim pesan otomatis ke grup. Setiap penolakan dicatat ke audit dan metrics.
 
+## Format SIGNAL AUDIT
+
+Blok `SIGNAL AUDIT` hanya menggunakan label `belum ada sinyal` jika counter benar-benar nol. Jika counter sudah lebih dari nol tetapi timestamp lama belum tersedia, console menampilkan `sudah tercatat`; jika timestamp tersedia, console menampilkan waktu signal terakhir.
+
+```text
+SIGNAL AUDIT
+STATUS    : 17x | terakhir 25/08, 02.54.11
+ANTICALL  : 0x  | belum ada sinyal
+AUTOBLOCK : 0x  | belum ada sinyal
+WAKTU     : 25/08/2026, 02.54.11 WIB
+```
+
+Setiap signal baru sekarang memperbarui `healthStore.signalHealth` secara persisten. Signal Status dicatat saat terdeteksi, penolakan panggilan dicatat saat `rejectCall` berhasil, dan autoblock dicatat saat pemblokiran berhasil.
+
 ## Format notifikasi alert
 
 Notifikasi operasional sekarang menggunakan format terstruktur agar detail sesi, status, waktu, dan tindakan berikutnya mudah dibaca. Contoh untuk logout WhatsApp:

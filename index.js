@@ -1162,6 +1162,10 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
         metricsStore.callsBlocked = 0;
         metricsStore.reconnects = 0;
         metricsStore.queueDrops = 0;
+        ensureSignalHealthStore();
+        for (const key of ['status', 'antiCall', 'autoBlock']) {
+            healthStore.signalHealth[key] = { lastAt: null, lastSource: '' };
+        }
         auditStore.entries = [];
         failedJobStore.jobs = [];
         processedStatusCache.flushAll();
@@ -1514,15 +1518,17 @@ function ensureSignalHealthStore() {
 }
 
 function formatLastSignalAt(isoString) {
-    if (!isoString) return 'belum ada';
+    if (!isoString) return '';
     try {
-        return new Date(isoString).toLocaleString('id-ID', {
+        const date = new Date(isoString);
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toLocaleString('id-ID', {
             day: '2-digit', month: '2-digit',
             hour: '2-digit', minute: '2-digit', second: '2-digit',
             timeZone: DISPLAY_TIME_ZONE
         });
     } catch {
-        return 'belum ada';
+        return '';
     }
 }
 
@@ -1537,8 +1543,10 @@ function touchSignalHealth(signalKey, source = '') {
 
 function buildSignalAuditLine(metricValue, signalState) {
     const countValue = Number(metricValue || 0);
+    if (countValue <= 0) return '0x | belum ada sinyal';
     const lastText = formatLastSignalAt(signalState?.lastAt);
-    return `${countValue}x | ${lastText}`;
+    if (!lastText) return `${countValue}x | sudah tercatat`;
+    return `${countValue}x | terakhir ${lastText}`;
 }
 
 function emitSignalAuditBox() {
@@ -4155,6 +4163,7 @@ function enqueueIncomingStatuses(sock, messages = [], source = 'live') {
         }
         detectedCount += 1;
         incrementMetric('statusDetected', 1);
+        touchSignalHealth('status', source);
         updateHealth({ lastStatusReceivedAt: new Date().toISOString() });
         const isFresh = source === 'live' ? isFreshStatusMessage(msg) : false;
         const queueKey = getQueueMessageKey(msg);
@@ -4252,6 +4261,7 @@ function enqueueUpdatedStatuses(sock, updates = []) {
             continue;
         }
         incrementMetric('statusDetected', 1);
+        touchSignalHealth('status', 'update');
         updateHealth({ lastStatusReceivedAt: new Date().toISOString() });
         enqueueStatusTask(() => forwardStatusMedia(sock, msg), {
             urgent: isFreshStatusMessage(msg),
