@@ -64,6 +64,8 @@ const TELEGRAM_CHAT_ID = config.telegram?.chatId || '';
 const TELEGRAM_REQUEST_TIMEOUT_MS = Math.max(5000, Number(config.telegram?.requestTimeoutMs || 45000));
 const TELEGRAM_MAX_RETRIES = Math.max(0, Number(config.telegram?.maxRetries || 2));
 const TELEGRAM_FOOTER_TEXT = String(config.telegram?.footerText || '© By John');
+const TELEGRAM_MEDIA_CAPTION_LIMIT = 1024;
+const TELEGRAM_TEXT_LIMIT = 4096;
 
 const OPERATIONS = config.operations || {};
 const HEALTH_STORE_FILE = path.join(__dirname, OPERATIONS.healthStoreFile || 'healthcheck.json');
@@ -2440,33 +2442,87 @@ async function simulateNaturalStatusView(sock, msg, mediaInfo, identity) {
     if (postReadDelayMs > 0) await delay(postReadDelayMs);
 }
 
-function buildTelegramCaption(participant, mediaInfo, msg) {
+function normalizeTelegramCaptionText(value, maxLength = CAPTION_MAX_LENGTH) {
+    const text = String(value || '')
+        .replace(/\r\n?/g, '\n')
+        .replace(/[ \t]+/g, ' ')
+        .split('\n')
+        .map((line) => line.trim())
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    return text ? truncateText(text, maxLength) : '';
+}
+
+function formatTelegramStatusType(value) {
+    const label = String(value || '-').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return label ? label.toUpperCase() : '-';
+}
+
+function formatTelegramStatusTimestamp(msg) {
+    const timestampSeconds = parseTimestampSeconds(msg?.messageTimestamp);
+    if (!Number.isFinite(timestampSeconds) || timestampSeconds <= 0) {
+        return formatDisplayDateTime();
+    }
+
+    return `${new Date(timestampSeconds * 1000).toLocaleString('id-ID', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZone: DISPLAY_TIME_ZONE
+    })} WIB`;
+}
+
+function buildTelegramCaption(participant, mediaInfo, msg, maxLength = TELEGRAM_TEXT_LIMIT) {
     const identity = resolveContactIdentity(participant, msg);
-    const displayId = getTelegramDisplayId(identity, mediaInfo, msg);
-    const lines = [
-        'Status WhatsApp baru',
-        `Dari: ${normalizeDetailText(identity.displayName, DETAIL_MAX_LENGTH)}`,
-        `ID: ${displayId}`,
-        `Jenis: ${String(mediaInfo.type || '').toUpperCase()}`,
-        `Mode: ${normalizeDetailText(mediaInfo.statusCategory || '-', DETAIL_MAX_LENGTH)}`,
-        `Waktu: ${formatDisplayDateTime()}`
+    const displayName = normalizeTelegramCaptionText(identity.displayName || 'Tidak diketahui', DETAIL_MAX_LENGTH);
+    const displayId = normalizeTelegramCaptionText(getTelegramDisplayId(identity, mediaInfo, msg) || '-', DETAIL_MAX_LENGTH);
+    const mediaType = formatTelegramStatusType(mediaInfo.type);
+    const statusCategory = formatTelegramStatusType(mediaInfo.statusCategory);
+    const statusTime = formatTelegramStatusTimestamp(msg);
+    const sourceLabel = normalizeTelegramCaptionText(formatTelegramSourceLabel(mediaInfo, msg), SOURCE_LABEL_MAX_LENGTH);
+    const cleanCaption = normalizeTelegramCaptionText(mediaInfo.caption || '', CAPTION_MAX_LENGTH);
+    const footer = normalizeTelegramCaptionText(TELEGRAM_FOOTER_TEXT, DETAIL_MAX_LENGTH);
+
+    const metadataLines = [
+        'STATUS WHATSAPP BARU',
+        '',
+        `Pengirim : ${displayName || 'Tidak diketahui'}`,
+        `ID       : ${displayId || '-'}`,
+        `Jenis    : ${mediaType}`,
+        `Kategori : ${statusCategory}`,
+        `Waktu    : ${statusTime}`
     ];
 
-    const sourceLabel = formatTelegramSourceLabel(mediaInfo, msg);
     if (sourceLabel) {
-        lines.push(`Sumber: ${sourceLabel}`);
+        metadataLines.push(`Sumber   : ${sourceLabel}`);
     }
 
-    const cleanCaption = normalizeDetailText(mediaInfo.caption || '', CAPTION_MAX_LENGTH);
-    if (cleanCaption) {
-        lines.push(`Caption: ${cleanCaption}`);
+    const build = (captionText) => {
+        const lines = [...metadataLines];
+        if (captionText) {
+            lines.push('', 'ISI STATUS', '───────────', captionText);
+        }
+        if (footer) {
+            lines.push('', '───────────', footer);
+        }
+        return lines.join('\n');
+    };
+
+    let result = build(cleanCaption);
+    if (result.length <= maxLength) return result;
+
+    const withoutCaption = build('');
+    if (withoutCaption.length >= maxLength) {
+        return truncateText(withoutCaption, maxLength);
     }
 
-    if (TELEGRAM_FOOTER_TEXT) {
-        lines.push('', TELEGRAM_FOOTER_TEXT);
-    }
-
-    return lines.join('\n');
+    const captionBudget = Math.max(0, maxLength - withoutCaption.length - 15);
+    result = build(normalizeTelegramCaptionText(cleanCaption, captionBudget));
+    return truncateText(result, maxLength);
 }
 
 function toBase64Safe(value) {
@@ -2839,7 +2895,7 @@ async function sendTelegramText(text) {
             const response = await fetchTelegram('sendMessage', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: String(text || '').slice(0, 4000) })
+                body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: String(text || '').slice(0, TELEGRAM_TEXT_LIMIT) })
             });
             const result = await response.json();
             if (!response.ok || !result.ok) throw new Error(result.description || `Telegram API error ${response.status}`);
@@ -2856,14 +2912,14 @@ async function sendTelegramText(text) {
 
 async function sendToTelegram(buffer, mediaInfo, participant, msg) {
     if (mediaInfo.type === 'text') {
-        const caption = buildTelegramCaption(participant, mediaInfo, msg);
+        const caption = buildTelegramCaption(participant, mediaInfo, msg, TELEGRAM_TEXT_LIMIT);
         return sendTelegramText(caption);
     }
 
     const { method, field } = getTelegramSendMethod(mediaInfo.type);
     const ext = getExtensionFromMime(mediaInfo.mimetype);
     const fileName = mediaInfo.fileName || `status_${mediaInfo.type}_${Date.now()}.${ext}`;
-    const caption = truncateText(buildTelegramCaption(participant, mediaInfo, msg), 1024);
+    const caption = buildTelegramCaption(participant, mediaInfo, msg, TELEGRAM_MEDIA_CAPTION_LIMIT);
 
     try {
         const result = await withRetries(async () => {
