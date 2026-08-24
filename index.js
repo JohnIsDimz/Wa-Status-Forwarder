@@ -3166,10 +3166,6 @@ function getReactionTargetKeyIds(key = {}) {
     return [...new Set(remoteJids.flatMap((remoteJid) => participants.map((participant) => `${remoteJid}|${messageId}|${participant}`)))];
 }
 
-function getReactionTargetKeyId(key = {}) {
-    return getReactionTargetKeyIds(key)[0] || '';
-}
-
 function normalizeReactionText(value) {
     return String(value || '').normalize('NFC').replace(/[\uFE0E\uFE0F]/g, '').trim();
 }

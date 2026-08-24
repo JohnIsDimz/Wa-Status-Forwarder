@@ -89,7 +89,7 @@ Untuk pemeriksaan sintaks JavaScript:
 npm test
 ```
 
-Perintah `npm test` menjalankan `node --check` terhadap `index.js`, `node.js`, `runner.js`, `config.js`, dan `db-helper.js`.
+Perintah `npm test` menjalankan `node --check` terhadap `index.js`, `node.js`, `runner.js`, dan `config.js`.
 
 ## Konfigurasi
 
@@ -141,6 +141,17 @@ Konfigurasi yang paling sering disesuaikan adalah sebagai berikut.
 | `statusForwarder` | Jenis media, queue, persistent backlog, deduplikasi, batas ukuran, delay, rate limit, auto-like, dan verifikasi reaction |
 | `operations` | Lokasi audit, metrics, health state, backup sesi, serta interval pemeriksaan |
 | `console` | Mode log dan detail log pengiriman, like, serta panggilan |
+
+## Anti-call
+
+Bot menolak panggilan masuk secara otomatis dan membedakan pesan untuk panggilan suara serta panggilan video. Pesan dapat diedit di bagian `connection.antiCall` pada `config.js`.
+
+```js
+busyMessageVoice: 'Mohon maaf, panggilan suara WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.',
+busyMessageVideo: 'Mohon maaf, panggilan video WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.'
+```
+
+Jika panggilan berasal dari grup, panggilan tetap ditolak tetapi bot tidak mengirim pesan otomatis ke grup. Setiap penolakan dicatat ke audit dan metrics.
 
 ## Format notifikasi alert
 

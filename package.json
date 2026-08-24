@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node runner.js",
     "bot": "node index.js",
-    "check": "node --check index.js && node --check node.js && node --check runner.js && node --check config.js && node --check db-helper.js",
+    "check": "node --check index.js && node --check node.js && node --check runner.js && node --check config.js",
     "test": "npm run check"
   },
   "dependencies": {

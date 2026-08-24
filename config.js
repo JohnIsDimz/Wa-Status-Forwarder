@@ -35,9 +35,9 @@ const PRESETS = {
                 notifyTelegram: false,
                 blockedCallStoreFile: 'blocked-callers.json',
                 sendBusyMessage: true,
-                busyMessageVoice: 'Mohon maaf, panggilan suara WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.',
-                busyMessageVideo: 'Mohon maaf, panggilan video WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.',
-                busyMessage: 'Mohon maaf, panggilan WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.'
+                busyMessageVoice: 'Mohon maaf, panggilan suara WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.',
+                busyMessageVideo: 'Mohon maaf, panggilan video WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.',
+                busyMessage: 'Mohon maaf, panggilan WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.'
             }
         },
         console: {
@@ -152,9 +152,9 @@ const PRESETS = {
                 notifyTelegram: false,
                 blockedCallStoreFile: 'blocked-callers.json',
                 sendBusyMessage: true,
-                busyMessageVoice: 'Mohon maaf, panggilan suara WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.',
-                busyMessageVideo: 'Mohon maaf, panggilan video WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.',
-                busyMessage: 'Mohon maaf, panggilan WhatsApp tidak dapat kami terima. Silakan kirim pesan melalui chat.'
+                busyMessageVoice: 'Mohon maaf, panggilan suara WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.',
+                busyMessageVideo: 'Mohon maaf, panggilan video WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.',
+                busyMessage: 'Mohon maaf, panggilan WhatsApp otomatis ditolak karena bot sedang tidak menerima panggilan. Silakan kirim pesan chat jika membutuhkan bantuan.'
             }
         },
         console: {
