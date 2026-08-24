@@ -95,6 +95,8 @@ Perintah `npm test` menjalankan `node --check` terhadap `index.js`, `node.js`, `
 
 Konfigurasi saat ini berada di `config.js`. Sebelum deployment, ubah sekurang-kurangnya bagian berikut:
 
+> Jangan mengedit hanya preset `agresif` jika server berjalan dengan preset `normal`; gunakan `.env` dan `BOT_AUTO_LIKE_EMOJI` untuk menghindari kesalahan tersebut.
+
 ```js
 whatsapp: {
     phoneNumber: '628xxxxxxxxxx',
@@ -112,6 +114,24 @@ telegram: {
 
 Jangan memasukkan token Telegram, nomor pribadi, file sesi, atau database runtime ke Git. Untuk production, prioritas berikutnya adalah memindahkan kredensial ke environment variable atau secret manager. Node.js modern sudah menyediakan dukungan `--env-file`, sehingga kebutuhan awal tersebut dapat dipenuhi tanpa menambah dependency konfigurasi.
 
+Preset yang digunakan default adalah `normal`. Gunakan `BOT_PRESET` untuk memilih preset dan `BOT_AUTO_LIKE_EMOJI` untuk mengganti emoji tanpa mengedit source code. Override environment memiliki prioritas lebih tinggi daripada nilai `autoLikeEmoji` di preset aktif. Setelah mengubah emoji, restart `runner.js` agar konfigurasi dimuat ulang.
+
+```bash
+cp .env.example .env
+# edit .env sesuai kebutuhan, misalnya BOT_AUTO_LIKE_EMOJI=🌹
+node --env-file=.env runner.js
+```
+
+Untuk `systemd`, masukkan environment langsung pada unit service atau gunakan `EnvironmentFile`:
+
+```ini
+[Service]
+EnvironmentFile=/opt/bot-tele/.env
+ExecStart=/usr/bin/node /opt/bot-tele/runner.js
+Restart=always
+RestartSec=5
+```
+
 Konfigurasi yang paling sering disesuaikan adalah sebagai berikut.
 
 | Bagian | Fungsi |
@@ -120,6 +140,8 @@ Konfigurasi yang paling sering disesuaikan adalah sebagai berikut.
 | `telegram` | Token bot, chat tujuan, timeout, retry, dan footer caption |
 | `connection` | Reconnect, keep-online, sinkronisasi history, privacy, dan anti-call |
 | `statusForwarder` | Jenis media, queue, persistent backlog, deduplikasi, batas ukuran, delay, rate limit, auto-like, dan verifikasi reaction |
+| `BOT_PRESET` | Memilih preset runtime (`normal` atau `agresif`) |
+| `BOT_AUTO_LIKE_EMOJI` | Override emoji reaction, misalnya `🌹`, tanpa mengubah source code |
 | `operations` | Lokasi audit, metrics, health state, backup sesi, serta interval pemeriksaan |
 | `console` | Mode log dan detail log pengiriman, like, serta panggilan |
 

@@ -134,7 +134,7 @@ const ALLOWED_MEDIA_TYPES = Array.isArray(STATUS.allowedMediaTypes)
     ? STATUS.allowedMediaTypes
     : ['image', 'video', 'audio', 'document', 'sticker'];
 const AUTO_LIKE_STATUS = STATUS.autoLikeStatus !== false;
-const AUTO_LIKE_EMOJI = String(STATUS.autoLikeEmoji || '🔥️');
+const AUTO_LIKE_EMOJI = String(STATUS.autoLikeEmoji || '🔥️').normalize('NFC').trim();
 const LIKE_RETRIES = Math.max(0, Number(STATUS.likeRetries || 1));
 const LIKE_VERIFICATION_ENABLED = STATUS.likeVerificationEnabled !== false;
 const LIKE_VERIFICATION_TIMEOUT_MS = Math.max(1000, Number(STATUS.likeVerificationTimeoutSeconds || 8) * 1000);
@@ -3115,6 +3115,10 @@ function getReactionTargetKeyId(key = {}) {
     return getReactionTargetKeyIds(key)[0] || '';
 }
 
+function normalizeReactionText(value) {
+    return String(value || '').normalize('NFC').replace(/[\uFE0E\uFE0F]/g, '').trim();
+}
+
 function isOwnReactionEvent(event = {}) {
     const reaction = event.reaction || {};
     const actorKey = reaction.key || reaction;
@@ -3133,7 +3137,7 @@ function resolveLikeVerification(event = {}) {
     const targetKey = event.key || event.reaction?.key;
     const targetIds = getReactionTargetKeyIds(targetKey);
     if (targetIds.length === 0) return false;
-    const reactionText = String(event.reaction?.text || '');
+    const reactionText = normalizeReactionText(event.reaction?.text);
     const targetId = targetIds.find((id) => pendingLikeVerifications.has(id)) || '';
     const pending = targetId ? pendingLikeVerifications.get(targetId) : null;
     if (!pending || reactionText !== pending.emoji) return false;
@@ -3153,6 +3157,7 @@ function resolveLikeVerification(event = {}) {
 
 function waitForLikeVerification(key, emoji, queueKey = '') {
     if (!LIKE_VERIFICATION_ENABLED) return Promise.resolve({ confirmed: false, reason: 'disabled' });
+    const normalizedEmoji = normalizeReactionText(emoji);
     const targetIds = getReactionTargetKeyIds(key);
     if (targetIds.length === 0) return Promise.resolve({ confirmed: false, reason: 'missing_target_key' });
 
@@ -3170,12 +3175,12 @@ function waitForLikeVerification(key, emoji, queueKey = '') {
             recordAudit('status_like_sent_unconfirmed', {
                 queueKey,
                 targetId: targetIds[0],
-                emoji,
+                emoji: normalizedEmoji,
                 timeoutMs: LIKE_VERIFICATION_TIMEOUT_MS
             }, 'warn');
             resolve({ confirmed: false, reason: 'verification_timeout', targetId: targetIds[0] });
         }, LIKE_VERIFICATION_TIMEOUT_MS);
-        const pending = { targetIds, emoji, queueKey, timer, resolve };
+        const pending = { targetIds, emoji: normalizedEmoji, queueKey, timer, resolve };
         for (const id of targetIds) pendingLikeVerifications.set(id, pending);
     });
 }

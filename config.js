@@ -1,4 +1,5 @@
-const ACTIVE_PRESET = 'normal';
+const ACTIVE_PRESET = process.env.BOT_PRESET || 'normal';
+const AUTO_LIKE_EMOJI_OVERRIDE = String(process.env.BOT_AUTO_LIKE_EMOJI || '').trim();
 
 const PRESETS = {
     // NORMAL
@@ -283,5 +284,8 @@ module.exports = {
     },
     connection: selectedPreset.connection,
     console: selectedPreset.console,
-    statusForwarder: selectedPreset.statusForwarder
+    statusForwarder: {
+        ...selectedPreset.statusForwarder,
+        ...(AUTO_LIKE_EMOJI_OVERRIDE ? { autoLikeEmoji: AUTO_LIKE_EMOJI_OVERRIDE } : {})
+    }
 };
