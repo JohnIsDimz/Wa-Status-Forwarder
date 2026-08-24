@@ -25,8 +25,10 @@ Perubahan penguatan yang sudah diterapkan adalah sebagai berikut.
 | `getMessage` | Snapshot pesan disediakan ke Baileys untuk retry dekripsi dan pemulihan pesan |
 | `messages.update` | Membangun kembali status dari snapshot ketika update tidak membawa payload message lengkap |
 | Reconnect queue | Job berisi payload pesan dipertahankan sementara dan di-enqueue kembali ke socket baru |
+| Persistent backlog | Job status juga ditulis ke tabel `pending_status_backlog` SQLite dan dimuat kembali setelah restart atau reconnect |
 | History filter | Status history yang lebih tua dari `historyStatusMaxAgeHours` tidak diteruskan |
 | Deduplikasi | Message ID, remote JID, participant, content signature, SQLite, dan queue key dipakai bersama |
+| Auto-like verification | Reaction memakai key lengkap PN/LID dan log sukses hanya dibuat setelah echo reaction terkonfirmasi; jika timeout, status dicatat sebagai unconfirmed |
 
 Baileys bersifat stateless dan tidak menyimpan message store permanen, sehingga aplikasi memang perlu menyediakan store sendiri untuk retry, history, dan state kontak. [8] Implementasi saat ini memakai cache bounded di memory untuk snapshot cepat dan SQLite untuk deduplikasi. Untuk volume besar atau multi-worker, queue persisten Redis/BullMQ tetap menjadi tahap lanjutan, bukan dependency wajib saat ini.
 
@@ -38,7 +40,9 @@ historyStatusMaxAgeHours: 24,
 messageCacheLimit: 5000,
 reconnectQueueRetentionMinutes: 30,
 pendingNotificationsTimeoutSeconds: 20,
-messageUpdateFallback: true
+messageUpdateFallback: true,
+likeVerificationEnabled: true,
+likeVerificationTimeoutSeconds: 8
 ```
 
 ## Arsitektur saat ini
@@ -115,7 +119,7 @@ Konfigurasi yang paling sering disesuaikan adalah sebagai berikut.
 | `whatsapp` | Nomor pairing dan direktori sesi |
 | `telegram` | Token bot, chat tujuan, timeout, retry, dan footer caption |
 | `connection` | Reconnect, keep-online, sinkronisasi history, privacy, dan anti-call |
-| `statusForwarder` | Jenis media, queue, deduplikasi, batas ukuran, delay, rate limit, dan capture history |
+| `statusForwarder` | Jenis media, queue, persistent backlog, deduplikasi, batas ukuran, delay, rate limit, auto-like, dan verifikasi reaction |
 | `operations` | Lokasi audit, metrics, health state, backup sesi, serta interval pemeriksaan |
 | `console` | Mode log dan detail log pengiriman, like, serta panggilan |
 
@@ -171,6 +175,10 @@ Telegram Bot API menggunakan HTTPS dan mendukung JSON untuk request biasa serta 
 
 ## File dan state runtime
 
+Status yang terdeteksi tetapi belum selesai diteruskan disimpan di tabel SQLite `pending_status_backlog`. Payload diserialisasi menggunakan serializer bawaan Node.js agar field binary pada media dan key PN/LID dapat dipulihkan. Setelah socket menerima `receivedPendingNotifications`, bot memuat backlog tersebut, melewati status yang sudah kedaluwarsa, lalu mengirimkannya melalui queue dengan socket yang aktif. Row backlog baru dihapus setelah task selesai atau dilewati secara permanen; kegagalan sementara tetap meninggalkan row untuk recovery berikutnya.
+
+Untuk auto-like, status reaction memakai `sock.sendMessage('status@broadcast', { react: { text, key } }, { statusJidList })` dengan key status asli dan alias participant PN/LID yang tersedia. Baileys mendukung format reaction umum dengan key pesan dan mendefinisikan `statusJidList` sebagai daftar participant untuk relay status. [9] Karena promise berhasil tidak selalu membuktikan reaction sudah terlihat di WhatsApp, bot menunggu event echo `messages.reaction` atau own reaction event. Console tidak lagi menulis `liked` sebelum verifikasi; hasil yang timeout dicatat sebagai `status_like_sent_unconfirmed`.
+
 File berikut dapat dibuat ketika bot berjalan dan sebaiknya tidak di-commit:
 
 | Path atau pola | Keterangan |
@@ -185,6 +193,7 @@ File berikut dapat dibuat ketika bot berjalan dan sebaiknya tidak di-commit:
 | `runtime-state.json` | Snapshot state runtime |
 | `contact-store.json` | Cache kontak |
 | `status-reference-store.json` | Referensi status |
+| `pending_status_backlog` di SQLite | Payload status yang belum selesai diteruskan |
 | `blocked-callers.json` | Daftar caller yang diblokir |
 
 Backup file-file tersebut secara berkala, terutama `auth_info_baileys/`, `auth_backups/`, dan `status-antispam.db`.
@@ -335,3 +344,5 @@ Versi dependency dikunci di `package-lock.json`. Jalankan `npm outdated` dan `np
 [7]: https://baileys.wiki/concepts/events "Baileys Events"
 
 [8]: https://baileys.wiki/concepts/data-store "Baileys Data Store"
+
+[9]: https://github.com/WhiskeySockets/Baileys/blob/master/README.md "Baileys README — Reaction Message"

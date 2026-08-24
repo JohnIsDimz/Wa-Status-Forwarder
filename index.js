@@ -25,6 +25,7 @@ async function loadBaileys() {
 
 const { Boom } = require('@hapi/boom');
 const crypto = require('crypto');
+const v8 = require('v8');
 const fs = require('fs');
 const path = require('path');
 const pino = require('pino');
@@ -135,6 +136,8 @@ const ALLOWED_MEDIA_TYPES = Array.isArray(STATUS.allowedMediaTypes)
 const AUTO_LIKE_STATUS = STATUS.autoLikeStatus !== false;
 const AUTO_LIKE_EMOJI = String(STATUS.autoLikeEmoji || '🔥️');
 const LIKE_RETRIES = Math.max(0, Number(STATUS.likeRetries || 1));
+const LIKE_VERIFICATION_ENABLED = STATUS.likeVerificationEnabled !== false;
+const LIKE_VERIFICATION_TIMEOUT_MS = Math.max(1000, Number(STATUS.likeVerificationTimeoutSeconds || 8) * 1000);
 const POST_READ_LIKE_DELAY_MS = Math.max(0, Number(STATUS.postReadLikeDelaySeconds || 10) * 1000);
 const DUPLICATE_RETENTION_HOURS = Number(STATUS.duplicateRetentionHours || 72);
 const DUPLICATE_RETENTION_SECONDS = Math.max(3600, DUPLICATE_RETENTION_HOURS * 60 * 60);
@@ -244,6 +247,7 @@ let activeSocket = null;
 let activeSocketGeneration = 0;
 let pendingNotificationsTimeout = null;
 let waConnectionOpen = false;
+const pendingLikeVerifications = new Map();
 const pendingSqliteDocumentWrites = new Map();
 const pendingQueueRetryTimers = new Set();
 const pendingPreConnectHistoryMessages = [];
@@ -383,6 +387,19 @@ function initAntiSpamStorage() {
             ON processed_status_records (content_signature)
             WHERE content_signature IS NOT NULL AND content_signature <> '';
 
+            CREATE TABLE IF NOT EXISTS pending_status_backlog (
+                queue_key TEXT PRIMARY KEY,
+                message_blob TEXT NOT NULL,
+                source_type TEXT NOT NULL DEFAULT 'live',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                owner_mark TEXT DEFAULT '© By John'
+            );
+            CREATE INDEX IF NOT EXISTS idx_pending_status_backlog_created_at
+            ON pending_status_backlog (created_at);
+
             CREATE TABLE IF NOT EXISTS kv_store (
                 store_key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -515,6 +532,36 @@ function initAntiSpamStorage() {
             countDailyStatusReports: antiSpamDb.prepare('SELECT COUNT(*) AS total FROM daily_status_reports'),
             clearFingerprints: antiSpamDb.prepare('DELETE FROM processed_status_fingerprints'),
             clearStatusRecords: antiSpamDb.prepare('DELETE FROM processed_status_records'),
+            upsertPendingStatus: antiSpamDb.prepare(`
+                INSERT INTO pending_status_backlog (
+                    queue_key,
+                    message_blob,
+                    source_type,
+                    created_at,
+                    updated_at,
+                    attempts,
+                    last_error,
+                    owner_mark
+                ) VALUES (?, ?, ?, ?, ?, 0, NULL, '© By John')
+                ON CONFLICT(queue_key) DO UPDATE SET
+                    message_blob = excluded.message_blob,
+                    source_type = excluded.source_type,
+                    updated_at = excluded.updated_at
+            `),
+            selectPendingStatuses: antiSpamDb.prepare(`
+                SELECT queue_key, message_blob, source_type, created_at, updated_at, attempts, last_error
+                FROM pending_status_backlog
+                ORDER BY created_at ASC
+                LIMIT ?
+            `),
+            acknowledgePendingStatus: antiSpamDb.prepare('DELETE FROM pending_status_backlog WHERE queue_key = ?'),
+            recordPendingStatusError: antiSpamDb.prepare(`
+                UPDATE pending_status_backlog
+                SET attempts = attempts + 1, last_error = ?, updated_at = ?
+                WHERE queue_key = ?
+            `),
+            countPendingStatuses: antiSpamDb.prepare('SELECT COUNT(*) AS total FROM pending_status_backlog'),
+            clearPendingStatuses: antiSpamDb.prepare('DELETE FROM pending_status_backlog'),
             clearDocuments: antiSpamDb.prepare('DELETE FROM kv_store')
         };
 
@@ -926,6 +973,9 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
         metricsStore.likeRetried = 0;
         metricsStore.likeFallbackUsed = 0;
         metricsStore.likeFailed = 0;
+        metricsStore.likeSentUnconfirmed = 0;
+        metricsStore.likeVerified = 0;
+        metricsStore.likeReactionEvents = 0;
         metricsStore.operationalSnapshots = 0;
         metricsStore.storePrunes = 0;
         metricsStore.callsRejected = 0;
@@ -940,6 +990,7 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
         messageSnapshotCache.clear();
         processingFingerprints.clear();
         processingStatusKeys.clear();
+        antiSpamStatements?.clearPendingStatuses?.run();
         clearQueuedStatusTasks('daily_database_reset');
         saveHealthStore();
         flushPendingSqliteDocumentWrites();
@@ -1248,6 +1299,9 @@ const metricsStore = readJsonFile(METRICS_STORE_FILE, {
     likeRetried: 0,
     likeFallbackUsed: 0,
     likeFailed: 0,
+    likeSentUnconfirmed: 0,
+    likeVerified: 0,
+    likeReactionEvents: 0,
     operationalSnapshots: 0,
     storePrunes: 0,
     callsRejected: 0,
@@ -3019,6 +3073,143 @@ async function sendToTelegram(buffer, mediaInfo, participant, msg) {
     }
 }
 
+function buildStatusReactionKey(msg, participant = '', mediaInfo = null, identity = null) {
+    const originalKey = msg?.key || {};
+    const fallbackParticipant = participant
+        || mediaInfo?.authorJid
+        || identity?.preferredJid
+        || identity?.jid
+        || msg?.participant
+        || msg?.participantPn
+        || '';
+    const key = {
+        ...originalKey,
+        remoteJid: originalKey.remoteJid || 'status@broadcast',
+        id: originalKey.id || '',
+        participant: originalKey.participant || normalizeJid(fallbackParticipant) || undefined
+    };
+
+    for (const field of ['remoteJidAlt', 'remoteJidUsername', 'participantAlt', 'participantUsername', 'server_id', 'addressingMode', 'isViewOnce']) {
+        if (typeof originalKey[field] !== 'undefined') key[field] = originalKey[field];
+    }
+    return key;
+}
+
+function getReactionTargetKeyIds(key = {}) {
+    const remoteJids = [...new Set([
+        normalizeJid(key.remoteJid || ''),
+        normalizeJid(key.remoteJidAlt || ''),
+        'status@broadcast'
+    ].filter(Boolean))];
+    const messageId = String(key.id || '').trim();
+    const participants = [...new Set([
+        normalizeJid(key.participant || ''),
+        normalizeJid(key.participantAlt || ''),
+        ''
+    ])];
+    if (!messageId) return [];
+    return [...new Set(remoteJids.flatMap((remoteJid) => participants.map((participant) => `${remoteJid}|${messageId}|${participant}`)))];
+}
+
+function getReactionTargetKeyId(key = {}) {
+    return getReactionTargetKeyIds(key)[0] || '';
+}
+
+function isOwnReactionEvent(event = {}) {
+    const reaction = event.reaction || {};
+    const actorKey = reaction.key || reaction;
+    if (actorKey.fromMe === true) return true;
+    return [
+        actorKey.participant,
+        actorKey.participantPn,
+        actorKey.participantAlt,
+        actorKey.remoteJid,
+        actorKey.remoteJidAlt
+    ].some(isSelfJid);
+}
+
+function resolveLikeVerification(event = {}) {
+    if (!isOwnReactionEvent(event)) return false;
+    const targetKey = event.key || event.reaction?.key;
+    const targetIds = getReactionTargetKeyIds(targetKey);
+    if (targetIds.length === 0) return false;
+    const reactionText = String(event.reaction?.text || '');
+    const targetId = targetIds.find((id) => pendingLikeVerifications.has(id)) || '';
+    const pending = targetId ? pendingLikeVerifications.get(targetId) : null;
+    if (!pending || reactionText !== pending.emoji) return false;
+
+    for (const id of pending.targetIds) pendingLikeVerifications.delete(id);
+    clearTimeout(pending.timer);
+    incrementMetric('likeReactionEvents', 1);
+    incrementMetric('likeVerified', 1);
+    recordAudit('status_like_verified', {
+        queueKey: pending.queueKey || '',
+        targetId,
+        emoji: reactionText
+    }, 'info');
+    pending.resolve({ confirmed: true, targetId });
+    return true;
+}
+
+function waitForLikeVerification(key, emoji, queueKey = '') {
+    if (!LIKE_VERIFICATION_ENABLED) return Promise.resolve({ confirmed: false, reason: 'disabled' });
+    const targetIds = getReactionTargetKeyIds(key);
+    if (targetIds.length === 0) return Promise.resolve({ confirmed: false, reason: 'missing_target_key' });
+
+    const existing = targetIds.map((id) => pendingLikeVerifications.get(id)).find(Boolean);
+    if (existing) {
+        clearTimeout(existing.timer);
+        for (const id of existing.targetIds) pendingLikeVerifications.delete(id);
+        existing.resolve({ confirmed: false, reason: 'superseded' });
+    }
+
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+            for (const id of targetIds) pendingLikeVerifications.delete(id);
+            incrementMetric('likeSentUnconfirmed', 1);
+            recordAudit('status_like_sent_unconfirmed', {
+                queueKey,
+                targetId: targetIds[0],
+                emoji,
+                timeoutMs: LIKE_VERIFICATION_TIMEOUT_MS
+            }, 'warn');
+            resolve({ confirmed: false, reason: 'verification_timeout', targetId: targetIds[0] });
+        }, LIKE_VERIFICATION_TIMEOUT_MS);
+        const pending = { targetIds, emoji, queueKey, timer, resolve };
+        for (const id of targetIds) pendingLikeVerifications.set(id, pending);
+    });
+}
+
+function cancelLikeVerification(key, reason = 'cancelled') {
+    const targetIds = getReactionTargetKeyIds(key);
+    const pending = targetIds.map((id) => pendingLikeVerifications.get(id)).find(Boolean);
+    if (!pending) return;
+    for (const id of pending.targetIds) pendingLikeVerifications.delete(id);
+    clearTimeout(pending.timer);
+    pending.resolve({ confirmed: false, reason, targetId: targetIds[0] || '' });
+}
+
+function clearPendingLikeVerifications(reason = 'connection_closed') {
+    const pendingEntries = new Set(pendingLikeVerifications.values());
+    for (const pending of pendingEntries) {
+        for (const id of pending.targetIds) pendingLikeVerifications.delete(id);
+        clearTimeout(pending.timer);
+        pending.resolve({ confirmed: false, reason });
+    }
+}
+
+function inspectReactionMessage(msg) {
+    const reaction = msg?.message?.reactionMessage || msg?.message?.encReactionMessage;
+    if (!reaction?.key) return false;
+    return resolveLikeVerification({
+        key: reaction.key,
+        reaction: {
+            ...reaction,
+            key: msg.key
+        }
+    });
+}
+
 function getStatusLikeTargetJid(msg) {
     if (msg?.key?.remoteJid === 'status@broadcast') return 'status@broadcast';
     if (msg?.key?.remoteJid) return msg.key.remoteJid;
@@ -3029,13 +3220,17 @@ function getStatusLikeParticipants(msg, participant, mediaInfo, identity) {
     const candidates = [
         participant,
         msg?.key?.participantPn,
+        msg?.key?.participantAlt,
         msg?.participantPn,
+        msg?.participantAlt,
         msg?.senderPn,
         mediaInfo?.authorJid,
         identity?.preferredJid,
         identity?.jid,
         msg?.key?.participant,
-        msg?.participant
+        msg?.participant,
+        msg?.key?.remoteJidAlt,
+        msg?.remoteJidAlt
     ].map(normalizeJid).filter(Boolean);
 
     return [...new Set(candidates)].slice(0, STATUS_LIKE_PARTICIPANT_FALLBACKS);
@@ -3049,40 +3244,83 @@ function getStatusLikeFallbackTargets(msg, participant, mediaInfo, identity) {
         identity?.preferredJid,
         identity?.jid,
         msg?.key?.participant,
+        msg?.key?.participantAlt,
         msg?.participant,
+        msg?.participantAlt,
+        msg?.key?.remoteJidAlt,
         msg?.key?.remoteJid
     ].map(normalizeJid).filter(Boolean);
 
     return [...new Set(candidates)].filter((jid) => jid !== 'status@broadcast');
 }
 
-async function sendStatusLike(sock, msg, participant, mediaInfo, identity) {
+async function sendAndVerifyStatusReaction(sock, targetJid, reactionKey, sendOptions, meta = {}) {
+    const verificationPromise = waitForLikeVerification(reactionKey, AUTO_LIKE_EMOJI, meta.queueKey || '');
+    try {
+        const sent = await withRetries(
+            async () => {
+                const result = await sock.sendMessage(targetJid, {
+                    react: { text: AUTO_LIKE_EMOJI, key: reactionKey }
+                }, sendOptions);
+                if (!result?.key?.id) {
+                    throw new Error('status_like_missing_send_result');
+                }
+                return result;
+            },
+            LIKE_RETRIES,
+            meta.retryOptions || {}
+        );
+        const verification = await verificationPromise;
+        return { sent, ...verification };
+    } catch (error) {
+        cancelLikeVerification(reactionKey, 'send_failed');
+        await verificationPromise.catch(() => undefined);
+        throw error;
+    }
+}
+
+async function sendStatusLike(sock, msg, participant, mediaInfo, identity, queueKey = '') {
     if (runtimeState.pauseLike) {
         recordAudit('status_like_paused', buildMessageMeta(msg, mediaInfo, identity), 'info');
-        return;
+        return { sent: false, confirmed: false, reason: 'paused' };
     }
-    if (!AUTO_LIKE_STATUS || !msg?.key?.id) return;
-    if (mediaInfo.type === 'status-notification' || mediaInfo.type === 'unknown' || mediaInfo.isViewOnce) return;
+    if (!AUTO_LIKE_STATUS || !msg?.key?.id) return { sent: false, confirmed: false, reason: 'disabled' };
+    if (mediaInfo.type === 'status-notification' || mediaInfo.type === 'unknown' || mediaInfo.isViewOnce) {
+        return { sent: false, confirmed: false, reason: 'unsupported' };
+    }
+
     const statusParticipants = getStatusLikeParticipants(msg, participant, mediaInfo, identity);
+    const reactionKey = buildStatusReactionKey(msg, participant, mediaInfo, identity);
+    const metaBase = { ...buildMessageMeta(msg, mediaInfo, identity), queueKey };
     let lastPrimaryError = null;
 
     for (const statusParticipant of statusParticipants) {
         try {
-            await withRetries(
-                async () => {
-                    await sock.sendMessage('status@broadcast', { react: { text: AUTO_LIKE_EMOJI, key: msg.key } }, { statusJidList: [statusParticipant] });
-                },
-                LIKE_RETRIES,
+            const result = await sendAndVerifyStatusReaction(
+                sock,
+                'status@broadcast',
+                reactionKey,
+                { statusJidList: [statusParticipant] },
                 {
-                    metricKey: 'likeRetried',
-                    auditReason: 'status_like_retry_primary',
-                    meta: { ...buildMessageMeta(msg, mediaInfo, identity), statusParticipant }
+                    queueKey,
+                    retryOptions: {
+                        metricKey: 'likeRetried',
+                        auditReason: 'status_like_retry_primary',
+                        meta: { ...metaBase, statusParticipant }
+                    }
                 }
             );
-            incrementMetric('statusLiked', 1);
-            recordAudit('status_liked', { ...buildMessageMeta(msg, mediaInfo, identity), statusParticipant }, 'info');
-            logLike(identity, mediaInfo);
-            return;
+            if (result.sent) {
+                if (result.confirmed) {
+                    incrementMetric('statusLiked', 1);
+                    recordAudit('status_like_verified', { ...metaBase, statusParticipant }, 'info');
+                    logLike(identity, mediaInfo);
+                } else {
+                    recordAudit('status_like_sent_unconfirmed', { ...metaBase, statusParticipant, reason: result.reason || 'unknown' }, 'warn');
+                }
+                return result;
+            }
+            lastPrimaryError = new Error(`status_like_unconfirmed:${result.reason || 'unknown'}`);
         } catch (error) {
             lastPrimaryError = error;
         }
@@ -3092,22 +3330,32 @@ async function sendStatusLike(sock, msg, participant, mediaInfo, identity) {
         const fallbackTargets = getStatusLikeFallbackTargets(msg, participant, mediaInfo, identity);
         for (const fallbackTarget of fallbackTargets) {
             try {
-                await withRetries(
-                    async () => {
-                        await sock.sendMessage(fallbackTarget, { react: { text: AUTO_LIKE_EMOJI, key: msg.key } });
-                    },
-                    LIKE_RETRIES,
+                const result = await sendAndVerifyStatusReaction(
+                    sock,
+                    fallbackTarget,
+                    reactionKey,
+                    {},
                     {
-                        metricKey: 'likeRetried',
-                        auditReason: 'status_like_retry_fallback',
-                        meta: { ...buildMessageMeta(msg, mediaInfo, identity), fallbackTarget }
+                        queueKey,
+                        retryOptions: {
+                            metricKey: 'likeRetried',
+                            auditReason: 'status_like_retry_fallback',
+                            meta: { ...metaBase, fallbackTarget }
+                        }
                     }
                 );
-                incrementMetric('statusLiked', 1);
-                incrementMetric('likeFallbackUsed', 1);
-                recordAudit('status_like_fallback_success', { ...buildMessageMeta(msg, mediaInfo, identity), fallbackTarget }, 'warn');
-                logLike(identity, mediaInfo);
-                return;
+                if (result.sent) {
+                    incrementMetric('likeFallbackUsed', 1);
+                    if (result.confirmed) {
+                        incrementMetric('statusLiked', 1);
+                        recordAudit('status_like_fallback_verified', { ...metaBase, fallbackTarget }, 'info');
+                        logLike(identity, mediaInfo);
+                    } else {
+                        recordAudit('status_like_fallback_unconfirmed', { ...metaBase, fallbackTarget, reason: result.reason || 'unknown' }, 'warn');
+                    }
+                    return result;
+                }
+                lastPrimaryError = new Error(`status_like_fallback_unconfirmed:${result.reason || 'unknown'}`);
             } catch (fallbackError) {
                 lastPrimaryError = fallbackError;
             }
@@ -3115,10 +3363,11 @@ async function sendStatusLike(sock, msg, participant, mediaInfo, identity) {
     }
 
     incrementMetric('likeFailed', 1);
-    recordFailedJob('status_like', buildMessageMeta(msg, mediaInfo, identity), lastPrimaryError?.message || 'auto_like_failed');
+    recordFailedJob('status_like', metaBase, lastPrimaryError?.message || 'auto_like_failed');
     updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `status_like:${lastPrimaryError?.message || 'failed'}` });
-    recordAudit('status_like_failed', { ...buildMessageMeta(msg, mediaInfo, identity), error: lastPrimaryError?.message || 'failed' }, 'warn');
+    recordAudit('status_like_failed', { ...metaBase, error: lastPrimaryError?.message || 'failed' }, 'warn');
     logError('Auto like', lastPrimaryError?.message || 'gagal');
+    return { sent: false, confirmed: false, reason: lastPrimaryError?.message || 'failed' };
 }
 
 async function applyAntiCallPrivacy(sock) {
@@ -3327,9 +3576,15 @@ async function drainStatusQueue() {
             if (gap > 0) await delay(gap);
         }
         try {
-            await current.taskFactory();
+            const completed = await current.taskFactory();
+            if (completed === false) {
+                recordPendingStatusError(current.queueKey, new Error('status_processing_deferred'));
+            } else {
+                acknowledgePendingStatus(current.queueKey);
+            }
             if (current.queueKey) queuedStatusKeys.delete(current.queueKey);
         } catch (error) {
+            recordPendingStatusError(current.queueKey, error);
             const attempt = Number(current.attempt || 1);
             const maxAttempts = Number(current.maxAttempts || 1);
             const canRetry = attempt < maxAttempts && isTransientError(error);
@@ -3352,6 +3607,7 @@ async function drainStatusQueue() {
                         maxAttempts,
                         createdAt: current.createdAt,
                         message: current.message,
+                        sourceType: current.sourceType,
                         socketGeneration: current.socketGeneration || 0
                     });
                 }, STATUS_TASK_RETRY_DELAY_MS);
@@ -3383,6 +3639,103 @@ function trimQueueIfNeeded(isUrgent) {
         recordAudit('queue_drop_total', { queueKey: removed?.queueKey || '' }, 'warn');
     }
     syncQueueHealth();
+}
+
+function serializeStatusMessage(message) {
+    try {
+        return v8.serialize(message).toString('base64');
+    } catch (error) {
+        recordAudit('status_backlog_serialize_failed', { error: error?.message || String(error) }, 'warn');
+        return '';
+    }
+}
+
+function deserializeStatusMessage(blob) {
+    try {
+        if (!blob) return null;
+        return v8.deserialize(Buffer.from(blob, 'base64'));
+    } catch (error) {
+        recordAudit('status_backlog_deserialize_failed', { error: error?.message || String(error) }, 'warn');
+        return null;
+    }
+}
+
+function persistPendingStatusTask(task, sourceType = 'live') {
+    if (!antiSpamStatements?.upsertPendingStatus || !task?.message || !task.queueKey) return;
+    const messageBlob = serializeStatusMessage(task.message);
+    if (!messageBlob) return;
+    try {
+        const now = Date.now();
+        antiSpamStatements.upsertPendingStatus.run(
+            task.queueKey,
+            messageBlob,
+            sourceType,
+            Number(task.createdAt || now),
+            now
+        );
+    } catch (error) {
+        recordAudit('status_backlog_persist_failed', { queueKey: task.queueKey, error: error?.message || String(error) }, 'warn');
+    }
+}
+
+function acknowledgePendingStatus(queueKey) {
+    if (!queueKey || !antiSpamStatements?.acknowledgePendingStatus) return;
+    try {
+        antiSpamStatements.acknowledgePendingStatus.run(queueKey);
+    } catch (error) {
+        recordAudit('status_backlog_ack_failed', { queueKey, error: error?.message || String(error) }, 'warn');
+    }
+}
+
+function recordPendingStatusError(queueKey, error) {
+    if (!queueKey || !antiSpamStatements?.recordPendingStatusError) return;
+    try {
+        antiSpamStatements.recordPendingStatusError.run(
+            error?.message || String(error),
+            Date.now(),
+            queueKey
+        );
+    } catch (dbError) {
+        recordAudit('status_backlog_error_record_failed', { queueKey, error: dbError?.message || String(dbError) }, 'warn');
+    }
+}
+
+function loadPendingStatusBacklog(sock) {
+    if (!sock || !antiSpamStatements?.selectPendingStatuses) return;
+    let rows = [];
+    try {
+        rows = antiSpamStatements.selectPendingStatuses.all(MAX_QUEUE_SIZE);
+    } catch (error) {
+        recordAudit('status_backlog_load_failed', { error: error?.message || String(error) }, 'warn');
+        return;
+    }
+
+    for (const row of rows) {
+        const message = deserializeStatusMessage(row.message_blob);
+        if (!message || !isStatusLikeMessage(message)) {
+            acknowledgePendingStatus(row.queue_key);
+            continue;
+        }
+        if (isHistoryStatusExpired(message)) {
+            incrementMetric('statusHistorySkippedOld', 1);
+            acknowledgePendingStatus(row.queue_key);
+            continue;
+        }
+        enqueueStatusTask(() => forwardStatusMedia(sock, message), {
+            urgent: true,
+            queueKey: row.queue_key,
+            message,
+            attempt: Math.max(1, Number(row.attempts || 0) + 1),
+            maxAttempts: STATUS_TASK_RETRY_ATTEMPTS + 1,
+            createdAt: Number(row.created_at || Date.now()),
+            sourceType: row.source_type || 'persisted',
+            socketGeneration: activeSocket === sock ? activeSocketGeneration : 0
+        });
+    }
+
+    if (rows.length > 0) {
+        recordAudit('status_backlog_loaded', { count: rows.length }, 'info');
+    }
 }
 
 function rememberStatusTaskForReconnect(task) {
@@ -3425,6 +3778,7 @@ function flushReconnectStatusTasks(sock) {
             maxAttempts: task.maxAttempts,
             createdAt: task.createdAt,
             message: task.message,
+            sourceType: 'reconnect',
             socketGeneration: activeSocket === sock ? activeSocketGeneration : 0
         });
     }
@@ -3461,8 +3815,10 @@ function enqueueStatusTask(taskFactory, options = {}) {
         attempt: Math.max(1, Number(options.attempt || 1)),
         maxAttempts: Math.max(1, Number(options.maxAttempts || (STATUS_TASK_RETRY_ATTEMPTS + 1))),
         createdAt: Number(options.createdAt || Date.now()),
+        sourceType: String(options.sourceType || 'live'),
         socketGeneration: Number(options.socketGeneration || activeSocketGeneration || 0)
     };
+    persistPendingStatusTask(task, task.sourceType);
     if (queueKey && DE_DUPLICATE_PENDING_QUEUE) queuedStatusKeys.add(queueKey);
     if (task.urgent) urgentStatusQueue.push(task); else normalStatusQueue.push(task);
     syncQueueHealth();
@@ -3498,6 +3854,7 @@ function enqueueIncomingStatuses(sock, messages = [], source = 'live') {
             urgent: isFresh,
             queueKey,
             message: msg,
+            sourceType: source,
             socketGeneration: activeSocket === sock ? activeSocketGeneration : 0
         });
         if (source === 'history') historyAccepted += 1;
@@ -3553,6 +3910,7 @@ function markWhatsAppReady(sock, reason = 'received_pending_notifications') {
         reconnectAttempts: 0
     });
     recordAudit('connection_caught_up', { reason }, 'info');
+    loadPendingStatusBacklog(sock);
     flushPostConnectSystemMessages();
     flushPreConnectEventBuffers(sock);
 }
@@ -3591,6 +3949,7 @@ function enqueueUpdatedStatuses(sock, updates = []) {
             urgent: isFreshStatusMessage(msg),
             queueKey: getQueueMessageKey(msg),
             message: msg,
+            sourceType: 'update',
             socketGeneration: activeSocket === sock ? activeSocketGeneration : 0
         });
     }
@@ -3599,14 +3958,14 @@ function enqueueUpdatedStatuses(sock, updates = []) {
 async function forwardStatusMedia(sock, msg) {
     if (runtimeState.pauseForward) {
         recordAudit('forward_paused', buildMessageMeta(msg), 'info');
-        return;
+        return false;
     }
-    if (!msg?.message || !isStatusLikeMessage(msg)) return;
+    if (!msg?.message || !isStatusLikeMessage(msg)) return true;
 
     const mediaInfo = extractStatusMediaInfo(msg.message, msg);
     if (!mediaInfo) {
         recordAudit('status_extract_failed', buildMessageMeta(msg), 'warn');
-        return;
+        return false;
     }
 
     logStatusDetection(msg, mediaInfo);
@@ -3616,7 +3975,7 @@ async function forwardStatusMedia(sock, msg) {
         if (DEBUG_STATUS_TYPE_DETECTION && !ULTRA_MINIMAL_CONSOLE) {
             logDebug('Status terdeteksi tetapi participant belum bisa dipetakan');
         }
-        return;
+        return false;
     }
 
     const identity = resolveContactIdentity(participant, msg);
@@ -3626,7 +3985,7 @@ async function forwardStatusMedia(sock, msg) {
         incrementMetric('statusSkipped', 1);
         incrementMetric('statusFromMeSkipped', 1);
         recordAudit('status_skip_from_me', buildMessageMeta(msg, mediaInfo, identity), 'info');
-        return;
+        return true;
     }
 
     if (mediaInfo.type === 'status-notification') {
@@ -3635,13 +3994,13 @@ async function forwardStatusMedia(sock, msg) {
         if (DEBUG_STATUS_TYPE_DETECTION && !ULTRA_MINIMAL_CONSOLE) {
             logDebug(`${mediaInfo.statusCategory} | ${identity.displayName}`, 'notifikasi referensi');
         }
-        return;
+        return true;
     }
 
     if (mediaInfo.isViewOnce) {
         incrementMetric('statusSkipped', 1);
         recordAudit('status_skip_view_once_disabled', buildMessageMeta(msg, mediaInfo, identity), 'info');
-        return;
+        return true;
     }
 
     if (mediaInfo.type === 'unknown') {
@@ -3650,7 +4009,7 @@ async function forwardStatusMedia(sock, msg) {
         if (DEBUG_STATUS_TYPE_DETECTION && !ULTRA_MINIMAL_CONSOLE) {
             logDebug(`Unknown status | ${identity.displayName}`, mediaInfo.innerType);
         }
-        return;
+        return true;
     }
 
     const supportedTypes = [...ALLOWED_MEDIA_TYPES, 'text'];
@@ -3660,7 +4019,7 @@ async function forwardStatusMedia(sock, msg) {
         if (DEBUG_STATUS_TYPE_DETECTION && !ULTRA_MINIMAL_CONSOLE) {
             logDebug(`Tipe belum aktif | ${mediaInfo.type}`, identity.displayName);
         }
-        return;
+        return true;
     }
 
     await resolveStatusReference(mediaInfo, identity, msg);
@@ -3668,30 +4027,30 @@ async function forwardStatusMedia(sock, msg) {
     if (PROCESS_SAVED_CONTACTS_ONLY && !identity.isSaved) {
         incrementMetric('statusSkipped', 1);
         recordAudit('status_skip_unsaved_contact', buildMessageMeta(msg, mediaInfo, identity), 'info');
-        return;
+        return true;
     }
     if (isStatusTooOld(msg)) {
         incrementMetric('statusSkipped', 1);
         recordAudit('status_skip_old', buildMessageMeta(msg, mediaInfo, identity), 'info');
-        return;
+        return true;
     }
     if (isMediaTooLarge(mediaInfo)) {
         incrementMetric('statusSkipped', 1);
         recordAudit('status_skip_media_too_large', buildMessageMeta(msg, mediaInfo, identity), 'info');
-        return;
+        return true;
     }
 
     const rateState = isRateLimited(identity);
     if (rateState.limited) {
         incrementMetric('statusSkipped', 1);
         recordAudit('status_skip_rate_limited', { ...buildMessageMeta(msg, mediaInfo, identity), reason: rateState.reason }, 'warn');
-        return;
+        return true;
     }
 
     if (!isTelegramConfigured()) {
         warnTelegramConfig();
         recordAudit('telegram_not_configured', buildMessageMeta(msg, mediaInfo, identity), 'error');
-        return;
+        return false;
     }
 
     const statusPrimaryKey = buildStatusPrimaryKey(msg, participant, mediaInfo);
@@ -3704,7 +4063,7 @@ async function forwardStatusMedia(sock, msg) {
         if (!ULTRA_MINIMAL_CONSOLE) {
             logDuplicateSkip(identity, mediaInfo, 'precheck duplicate', statusPrimaryKey);
         }
-        return;
+        return true;
     }
 
     try {
@@ -3712,7 +4071,10 @@ async function forwardStatusMedia(sock, msg) {
         if (POST_READ_LIKE_DELAY_MS > 0) {
             await delay(POST_READ_LIKE_DELAY_MS);
         }
-        await sendStatusLike(sock, msg, participant, mediaInfo, identity);
+        const likeResult = await sendStatusLike(sock, msg, participant, mediaInfo, identity, getQueueMessageKey(msg, mediaInfo));
+        if (likeResult?.confirmed === false && likeResult?.reason === 'verification_timeout') {
+            recordAudit('status_like_not_confirmed_but_forward_continued', buildMessageMeta(msg, mediaInfo, identity), 'warn');
+        }
 
         let buffer = null;
         if (mediaInfo.type !== 'text') {
@@ -3732,7 +4094,7 @@ async function forwardStatusMedia(sock, msg) {
                     if (!ULTRA_MINIMAL_CONSOLE) {
                         logDuplicateSkip(identity, mediaInfo, 'buffer duplicate', statusPrimaryKey);
                     }
-                    return;
+                    return true;
                 }
                 processingFingerprints.add(bufferFingerprint);
                 activeFingerprints.push(bufferFingerprint);
@@ -3756,6 +4118,7 @@ async function forwardStatusMedia(sock, msg) {
         updateHealth({ lastStatusForwardedAt: new Date().toISOString() });
         recordAudit('status_forward_success', buildMessageMeta(msg, mediaInfo, identity), 'info');
         logSend(mediaInfo, identity, mediaInfo.statusCategory);
+        return true;
     } catch (error) {
         releaseFingerprints(statusPrimaryKey, activeFingerprints);
         trackDailyStatusFailure(identity, mediaInfo, msg, error);
@@ -3793,6 +4156,7 @@ async function connectToWhatsApp() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             getMessage: async (key) => getMessageSnapshot(key)?.message,
+            emitOwnEvents: true,
             msgRetryCounterCache,
             generateHighQualityLinkPreview: false,
             syncFullHistory: SYNC_FULL_HISTORY_ON_CONNECT,
@@ -3882,6 +4246,7 @@ async function connectToWhatsApp() {
             if (connection === 'close') {
                 if (isStaleSocket()) return;
                 clearPendingNotificationsTimeout();
+                clearPendingLikeVerifications('connection_closed');
                 waConnectionOpen = false;
                 waConnectionReady = false;
                 activeSocketGeneration += 1;
@@ -3919,10 +4284,18 @@ async function connectToWhatsApp() {
             }
         });
 
+        sock.ev.on('messages.reaction', (reactions) => {
+            if (isStaleSocket()) return;
+            for (const event of Array.isArray(reactions) ? reactions : []) {
+                resolveLikeVerification(event);
+            }
+        });
+
         sock.ev.on('messages.upsert', ({ messages, type }) => {
             if (isStaleSocket()) return;
             if (type !== 'notify' && type !== 'append') return;
             const incomingMessages = Array.isArray(messages) ? messages : [];
+            incomingMessages.forEach(inspectReactionMessage);
             const source = type === 'append' ? 'history' : 'live';
             incomingMessages.forEach(cacheMessageSnapshot);
             if (!waConnectionReady) {
