@@ -95,7 +95,7 @@ Perintah `npm test` menjalankan `node --check` terhadap `index.js`, `node.js`, `
 
 Konfigurasi saat ini berada di `config.js`. Sebelum deployment, ubah sekurang-kurangnya bagian berikut:
 
-> Jangan mengedit hanya preset `agresif` jika server berjalan dengan preset `normal`; gunakan `.env` dan `BOT_AUTO_LIKE_EMOJI` untuk menghindari kesalahan tersebut.
+> Jangan mengedit hanya preset `agresif` jika server berjalan dengan preset `normal`; ubah konstanta `AUTO_LIKE_EMOJI` di bagian paling atas `config.js` karena nilai tersebut digunakan bersama oleh semua preset.
 
 ```js
 whatsapp: {
@@ -112,21 +112,20 @@ telegram: {
 }
 ```
 
-Jangan memasukkan token Telegram, nomor pribadi, file sesi, atau database runtime ke Git. Untuk production, prioritas berikutnya adalah memindahkan kredensial ke environment variable atau secret manager. Node.js modern sudah menyediakan dukungan `--env-file`, sehingga kebutuhan awal tersebut dapat dipenuhi tanpa menambah dependency konfigurasi.
+Jangan memasukkan token Telegram, nomor pribadi, file sesi, atau database runtime ke Git. Bot ini membaca konfigurasi operasional langsung dari `config.js`, sehingga perubahan konfigurasi harus dilakukan di file tersebut lalu proses bot harus di-restart.
 
-Preset yang digunakan default adalah `normal`. Gunakan `BOT_PRESET` untuk memilih preset dan `BOT_AUTO_LIKE_EMOJI` untuk mengganti emoji tanpa mengedit source code. Override environment memiliki prioritas lebih tinggi daripada nilai `autoLikeEmoji` di preset aktif. Setelah mengubah emoji, restart `runner.js` agar konfigurasi dimuat ulang.
+Untuk mengganti emoji auto-like, cukup edit satu konstanta berikut di bagian paling atas `config.js`:
 
-```bash
-cp .env.example .env
-# edit .env sesuai kebutuhan, misalnya BOT_AUTO_LIKE_EMOJI=🌹
-node --env-file=.env runner.js
+```js
+const AUTO_LIKE_EMOJI = '🌹';
 ```
 
-Untuk `systemd`, masukkan environment langsung pada unit service atau gunakan `EnvironmentFile`:
+Nilai tersebut digunakan oleh preset aktif. Tidak diperlukan perubahan pada `index.js`. Setelah mengubah emoji, restart `runner.js` agar konfigurasi dimuat ulang.
+
+Untuk `systemd`, gunakan unit Node.js biasa:
 
 ```ini
 [Service]
-EnvironmentFile=/opt/bot-tele/.env
 ExecStart=/usr/bin/node /opt/bot-tele/runner.js
 Restart=always
 RestartSec=5
@@ -140,10 +139,23 @@ Konfigurasi yang paling sering disesuaikan adalah sebagai berikut.
 | `telegram` | Token bot, chat tujuan, timeout, retry, dan footer caption |
 | `connection` | Reconnect, keep-online, sinkronisasi history, privacy, dan anti-call |
 | `statusForwarder` | Jenis media, queue, persistent backlog, deduplikasi, batas ukuran, delay, rate limit, auto-like, dan verifikasi reaction |
-| `BOT_PRESET` | Memilih preset runtime (`normal` atau `agresif`) |
-| `BOT_AUTO_LIKE_EMOJI` | Override emoji reaction, misalnya `🌹`, tanpa mengubah source code |
 | `operations` | Lokasi audit, metrics, health state, backup sesi, serta interval pemeriksaan |
 | `console` | Mode log dan detail log pengiriman, like, serta panggilan |
+
+## Format notifikasi alert
+
+Notifikasi operasional sekarang menggunakan format terstruktur agar detail sesi, status, waktu, dan tindakan berikutnya mudah dibaca. Contoh untuk logout WhatsApp:
+
+```text
+ALERT BOT
+━━━━━━━━━━━━━━━━━━━━
+Jenis    : SESI LOGOUT
+Status   : Sesi WhatsApp tidak terautentikasi
+Detail   : Kode status: 401 (Unauthorized)
+Waktu    : 25/08/2026 01.35.52 WIB
+Tindakan : Pairing ulang WhatsApp diperlukan sebelum bot dapat bekerja kembali.
+━━━━━━━━━━━━━━━━━━━━
+```
 
 ## Menjalankan bot
 

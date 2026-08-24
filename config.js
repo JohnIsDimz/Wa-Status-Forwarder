@@ -1,5 +1,6 @@
-const ACTIVE_PRESET = process.env.BOT_PRESET || 'normal';
-const AUTO_LIKE_EMOJI_OVERRIDE = String(process.env.BOT_AUTO_LIKE_EMOJI || '').trim();
+const ACTIVE_PRESET = 'normal';
+// Edit satu nilai ini untuk mengganti emoji auto-like pada semua preset.
+const AUTO_LIKE_EMOJI = '💚';
 
 const PRESETS = {
     // NORMAL
@@ -50,7 +51,7 @@ const PRESETS = {
         statusForwarder: {
             allowedMediaTypes: ['image', 'video', 'audio', 'document', 'sticker'],
             autoLikeStatus: true,
-            autoLikeEmoji: '💚',
+            autoLikeEmoji: AUTO_LIKE_EMOJI,
             likeRetries: 1,
             likeVerificationEnabled: true,
             likeVerificationTimeoutSeconds: 8,
@@ -167,7 +168,7 @@ const PRESETS = {
         statusForwarder: {
             allowedMediaTypes: ['image', 'video', 'audio', 'document', 'sticker'],
             autoLikeStatus: true,
-            autoLikeEmoji: '💚',
+            autoLikeEmoji: AUTO_LIKE_EMOJI,
             likeRetries: 1,
             likeVerificationEnabled: true,
             likeVerificationTimeoutSeconds: 8,
@@ -284,8 +285,5 @@ module.exports = {
     },
     connection: selectedPreset.connection,
     console: selectedPreset.console,
-    statusForwarder: {
-        ...selectedPreset.statusForwarder,
-        ...(AUTO_LIKE_EMOJI_OVERRIDE ? { autoLikeEmoji: AUTO_LIKE_EMOJI_OVERRIDE } : {})
-    }
+    statusForwarder: selectedPreset.statusForwarder
 };

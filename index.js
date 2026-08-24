@@ -2214,13 +2214,68 @@ async function sendWhatsappAlertToOwners(text) {
     return sent;
 }
 
-async function sendOperationalAlert(kind, message, options = {}) {
-    const alertText = [
-        'Alert bot',
-        `Jenis: ${kind}`,
-        `Info: ${message}`,
-        `Waktu: ${formatDisplayDateTime()}`
+function getOperationalAlertLabel(kind) {
+    const labels = {
+        sesi_logout: 'SESI LOGOUT',
+        startup_gagal: 'STARTUP GAGAL',
+        pairing_gagal: 'PAIRING GAGAL',
+        runtime_error: 'KESALAHAN RUNTIME',
+        database_rusak: 'DATABASE BERMASALAH',
+        database_warning: 'PERINGATAN DATABASE',
+        telegram_gagal_kirim: 'TELEGRAM GAGAL KIRIM',
+        telegram_gagal_kirim_media: 'TELEGRAM MEDIA GAGAL KIRIM'
+    };
+    return labels[kind] || normalizeDetailText(kind, 80).toUpperCase() || 'OPERASIONAL';
+}
+
+function getOperationalAlertStatus(kind) {
+    const statuses = {
+        sesi_logout: 'Sesi WhatsApp tidak terautentikasi',
+        startup_gagal: 'Bot gagal memulai proses',
+        pairing_gagal: 'Pairing WhatsApp gagal',
+        runtime_error: 'Terjadi kesalahan pada proses bot',
+        database_rusak: 'Database tidak dapat digunakan dengan normal',
+        database_warning: 'Pemeriksaan database menemukan peringatan',
+        telegram_gagal_kirim: 'Pesan tidak berhasil diteruskan ke Telegram',
+        telegram_gagal_kirim_media: 'Media tidak berhasil diteruskan ke Telegram'
+    };
+    return statuses[kind] || 'Bot memerlukan pemeriksaan';
+}
+
+function getOperationalAlertAction(kind) {
+    const actions = {
+        sesi_logout: 'Pairing ulang WhatsApp diperlukan sebelum bot dapat bekerja kembali.',
+        startup_gagal: 'Periksa konfigurasi dan log startup, lalu jalankan ulang runner.',
+        pairing_gagal: 'Pastikan nomor dan sesi pairing benar, lalu ulangi pairing.',
+        runtime_error: 'Periksa audit-log.json, failed-jobs.json, dan status service.',
+        database_rusak: 'Backup database sebelum melakukan pemulihan atau pemeriksaan manual.',
+        database_warning: 'Periksa healthcheck dan database sebelum melanjutkan operasi.',
+        telegram_gagal_kirim: 'Periksa bot token, chat ID, koneksi, dan batas API Telegram.',
+        telegram_gagal_kirim_media: 'Periksa ukuran media, koneksi, dan batas API Telegram.'
+    };
+    return actions[kind] || 'Periksa audit-log.json dan healthcheck.json untuk detail.';
+}
+
+function formatOperationalAlert(kind, message) {
+    const rawInfo = normalizeDetailText(message, 600) || 'Tidak ada detail tambahan';
+    const statusCodeMatch = rawInfo.match(/^statusCode\s*=\s*([^|]+)$/i);
+    const detail = statusCodeMatch
+        ? `Kode status: ${statusCodeMatch[1].trim()}${statusCodeMatch[1].trim() === '401' ? ' (Unauthorized)' : ''}`
+        : rawInfo;
+    return [
+        'ALERT BOT',
+        '━━━━━━━━━━━━━━━━━━━━',
+        `Jenis    : ${getOperationalAlertLabel(kind)}`,
+        `Status   : ${getOperationalAlertStatus(kind)}`,
+        `Detail   : ${detail}`,
+        `Waktu    : ${formatDisplayDateTime()}`,
+        `Tindakan : ${getOperationalAlertAction(kind)}`,
+        '━━━━━━━━━━━━━━━━━━━━'
     ].join('\n');
+}
+
+async function sendOperationalAlert(kind, message, options = {}) {
+    const alertText = formatOperationalAlert(kind, message);
 
     if (options.sendWhatsapp !== false) {
         try {
