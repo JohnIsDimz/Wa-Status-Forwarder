@@ -130,6 +130,8 @@ const BLOCKED_CALL_STORE_FILE = path.join(__dirname, ANTI_CALL.blockedCallStoreF
 
 const STATUS = config.statusForwarder || {};
 const PENDING_NOTIFICATIONS_TIMEOUT_MS = Math.max(5000, Number(STATUS.pendingNotificationsTimeoutSeconds || CONNECTION.pendingNotificationsTimeoutSeconds || 20) * 1000);
+const FORWARDED_CHANNEL_MEDIA_ENABLED = STATUS.forwardedChannelMediaEnabled !== false;
+const FORWARDED_CHANNEL_MEDIA_OWNER_ONLY = STATUS.forwardedChannelMediaOwnerOnly === true;
 const ALLOWED_MEDIA_TYPES = Array.isArray(STATUS.allowedMediaTypes)
     ? STATUS.allowedMediaTypes
     : ['image', 'video', 'audio', 'document', 'sticker'];
@@ -2329,6 +2331,8 @@ function inspectStatusEnvelope(message, wrappers = []) {
 
 function detectStatusCategory(msg, envelope) {
     const wrapperSet = new Set(envelope?.wrappers || []);
+    const originInfo = extractStatusOriginInfo(envelope?.content);
+    if (originInfo.sourceType === 'newsletter') return 'channel_forwarded';
     if (wrapperSet.has('groupStatusMentionMessage')) return 'group_status_mention';
     if (wrapperSet.has('statusMentionMessage')) return 'status_mention';
     if (wrapperSet.has('groupStatusMessageV2')) return 'group_status_v2';
@@ -2340,6 +2344,7 @@ function detectStatusCategory(msg, envelope) {
 function isStatusLikeMessage(msg) {
     if (!msg?.message) return false;
     if (msg.key?.remoteJid === 'status@broadcast') return true;
+    if (FORWARDED_CHANNEL_MEDIA_ENABLED && isForwardedChannelMediaMessage(msg)) return true;
     const topLevelKeys = getActiveMessageKeys(msg.message);
     return topLevelKeys.some((key) => [
         'statusMentionMessage',
@@ -2347,6 +2352,25 @@ function isStatusLikeMessage(msg) {
         'groupStatusMessage',
         'groupStatusMessageV2'
     ].includes(key));
+}
+
+function isForwardedChannelMediaMessage(msg) {
+    if (!FORWARDED_CHANNEL_MEDIA_ENABLED || !msg?.message) return false;
+    const envelope = inspectStatusEnvelope(msg.message);
+    const originInfo = extractStatusOriginInfo(envelope.content);
+    if (originInfo.sourceType !== 'newsletter') return false;
+    if (!FORWARDED_CHANNEL_MEDIA_OWNER_ONLY) return true;
+    const senderCandidates = [
+        msg?.key?.remoteJid,
+        msg?.key?.participant,
+        msg?.key?.participantPn,
+        msg?.participant,
+        msg?.senderPn
+    ].map(normalizeJid).filter(Boolean);
+    const ownerNumbers = Array.isArray(config?.owner?.allowedNumbers)
+        ? config.owner.allowedNumbers.map(normalizeOwnerNumber).filter(Boolean)
+        : [];
+    return senderCandidates.some((jid) => ownerNumbers.includes(getNumberFromJid(jid)));
 }
 
 function getStatusMessageContextInfo(content) {
@@ -4123,13 +4147,17 @@ async function forwardStatusMedia(sock, msg) {
     }
 
     try {
-        await simulateNaturalStatusView(sock, msg, mediaInfo, identity);
-        if (POST_READ_LIKE_DELAY_MS > 0) {
-            await delay(POST_READ_LIKE_DELAY_MS);
-        }
-        const likeResult = await sendStatusLike(sock, msg, participant, mediaInfo, identity, getQueueMessageKey(msg, mediaInfo));
-        if (likeResult?.confirmed === false && likeResult?.reason === 'verification_timeout') {
-            recordAudit('status_like_not_confirmed_but_forward_continued', buildMessageMeta(msg, mediaInfo, identity), 'warn');
+        if (mediaInfo.sourceType !== 'newsletter') {
+            await simulateNaturalStatusView(sock, msg, mediaInfo, identity);
+            if (POST_READ_LIKE_DELAY_MS > 0) {
+                await delay(POST_READ_LIKE_DELAY_MS);
+            }
+            const likeResult = await sendStatusLike(sock, msg, participant, mediaInfo, identity, getQueueMessageKey(msg, mediaInfo));
+            if (likeResult?.confirmed === false && likeResult?.reason === 'verification_timeout') {
+                recordAudit('status_like_not_confirmed_but_forward_continued', buildMessageMeta(msg, mediaInfo, identity), 'warn');
+            }
+        } else {
+            recordAudit('forwarded_channel_media_forward_only', buildMessageMeta(msg, mediaInfo, identity), 'info');
         }
 
         let buffer = null;

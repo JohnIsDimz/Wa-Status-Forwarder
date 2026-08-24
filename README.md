@@ -10,6 +10,21 @@ Implementasi saat ini menyediakan pemantauan status WhatsApp, pemrosesan gambar,
 
 Notifikasi suara lokal sudah dihapus sepenuhnya. Bot tidak lagi membutuhkan file MP3, program pemutar suara, terminal bell, atau akses audio server.
 
+## Cakupan sumber status dan media diteruskan
+
+Bot hanya memproses data yang memang diterima oleh akun WhatsApp tertaut. Sumber status dan media berikut diperlakukan berbeda:
+
+| Sumber | Dukungan | Cara kerja |
+|---|---|---|
+| Status kontak biasa | Didukung | Dibaca dari event Status/Stories `status@broadcast` dan diteruskan ke Telegram jika terlihat oleh akun bot |
+| Group Status | Didukung | Wrapper `groupStatusMessage`, `groupStatusMessageV2`, dan status mention dikenali sebagai status; sumber dan participant dipertahankan pada metadata |
+| Pesan biasa di grup | Tidak termasuk pipeline Status | Tidak diteruskan hanya karena berasal dari grup; bot tetap fokus pada Status/Stories |
+| Media dari saluran/newsletter yang diteruskan ke bot | Didukung secara aman | Jika pemilik/pengguna meneruskan media channel ke chat bot, metadata `forwardedNewsletterMessageInfo` dibaca lalu media diteruskan ke Telegram dengan label saluran |
+| Pesan channel langsung | Tidak diambil otomatis | Bot tidak melakukan pembacaan langsung atau scraping channel; hanya media yang benar-benar diterima sebagai forward yang diproses |
+| View Once | Tidak diteruskan | Tetap dilewati untuk menghormati kontrol sementara dan privasi pesan |
+
+Media channel yang diteruskan tidak diberi auto-like Status karena bukan Status asli. Event tersebut dicatat sebagai `forwarded_channel_media_forward_only` dan dikirim ke Telegram menggunakan kategori `CHANNEL FORWARDED` serta nama saluran jika metadata tersedia. Opsi `forwardedChannelMediaEnabled` dan `forwardedChannelMediaOwnerOnly` tersedia di `config.js`.
+
 ## Penguatan penangkapan sinyal status
 
 Pipeline capture sekarang menggunakan pendekatan **Node.js-only** tanpa Docker dan tanpa aplikasi GUI. Event `messages.upsert` dibedakan antara `notify` sebagai sinyal realtime dan `append` sebagai history/backfill. Batch `messaging-history.set` tetap diproses untuk menangkap status yang masuk ketika server sempat offline. Baileys mendokumentasikan bahwa history dikirim dalam beberapa batch dan bahwa `receivedPendingNotifications` menandai koneksi sudah menyelesaikan catch-up. [7]
@@ -41,6 +56,8 @@ messageCacheLimit: 5000,
 reconnectQueueRetentionMinutes: 30,
 pendingNotificationsTimeoutSeconds: 20,
 messageUpdateFallback: true,
+forwardedChannelMediaEnabled: true,
+forwardedChannelMediaOwnerOnly: false,
 likeVerificationEnabled: true,
 likeVerificationTimeoutSeconds: 8
 ```
@@ -138,7 +155,7 @@ Konfigurasi yang paling sering disesuaikan adalah sebagai berikut.
 | `whatsapp` | Nomor pairing dan direktori sesi |
 | `telegram` | Token bot, chat tujuan, timeout, retry, dan footer caption |
 | `connection` | Reconnect, keep-online, sinkronisasi history, privacy, dan anti-call |
-| `statusForwarder` | Jenis media, queue, persistent backlog, deduplikasi, batas ukuran, delay, rate limit, auto-like, dan verifikasi reaction |
+| `statusForwarder` | Jenis media, queue, persistent backlog, deduplikasi, batas ukuran, delay, rate limit, auto-like, verifikasi reaction, dan forwarded channel media |
 | `operations` | Lokasi audit, metrics, health state, backup sesi, serta interval pemeriksaan |
 | `console` | Mode log dan detail log pengiriman, like, serta panggilan |
 
