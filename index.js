@@ -369,6 +369,7 @@ function initAntiSpamStorage() {
                 remote_jid TEXT,
                 chat_scope TEXT,
                 source_type TEXT,
+                status_category TEXT,
                 media_type TEXT,
                 message_id TEXT,
                 content_signature TEXT,
@@ -393,6 +394,15 @@ function initAntiSpamStorage() {
                 queue_key TEXT PRIMARY KEY,
                 message_blob TEXT NOT NULL,
                 source_type TEXT NOT NULL DEFAULT 'live',
+                content_source_type TEXT,
+                message_id TEXT,
+                remote_jid TEXT,
+                participant_jid TEXT,
+                status_category TEXT,
+                media_type TEXT,
+                source_jid TEXT,
+                source_name TEXT,
+                display_name TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
@@ -401,7 +411,8 @@ function initAntiSpamStorage() {
             );
             CREATE INDEX IF NOT EXISTS idx_pending_status_backlog_created_at
             ON pending_status_backlog (created_at);
-
+            CREATE INDEX IF NOT EXISTS idx_pending_status_backlog_source_type
+            ON pending_status_backlog (source_type);
             CREATE TABLE IF NOT EXISTS kv_store (
                 store_key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -419,13 +430,90 @@ function initAntiSpamStorage() {
             );
             CREATE INDEX IF NOT EXISTS idx_daily_status_reports_generated_at
             ON daily_status_reports (generated_at);
+
         `);
 
+        const pendingStatusColumns = new Set(
+            antiSpamDb.prepare('PRAGMA table_info(pending_status_backlog)').all().map((column) => column.name)
+        );
+        const pendingStatusColumnsToAdd = {
+            content_source_type: 'TEXT',
+            message_id: 'TEXT',
+            remote_jid: 'TEXT',
+            participant_jid: 'TEXT',
+            status_category: 'TEXT',
+            media_type: 'TEXT',
+            source_jid: 'TEXT',
+            source_name: 'TEXT',
+            display_name: 'TEXT'
+        };
+        for (const [columnName, columnType] of Object.entries(pendingStatusColumnsToAdd)) {
+            if (!pendingStatusColumns.has(columnName)) {
+                antiSpamDb.exec(`ALTER TABLE pending_status_backlog ADD COLUMN ${columnName} ${columnType}`);
+            }
+        }
         try {
             antiSpamDb.exec('ALTER TABLE processed_status_records ADD COLUMN content_signature TEXT');
         } catch {
             // kolom sudah ada
         }
+        try {
+            antiSpamDb.exec('ALTER TABLE processed_status_records ADD COLUMN status_category TEXT');
+        } catch {
+            // kolom sudah ada
+        }
+
+        antiSpamDb.exec(`
+            CREATE INDEX IF NOT EXISTS idx_pending_status_backlog_message_id
+            ON pending_status_backlog (message_id);
+
+            DROP VIEW IF EXISTS v_processed_status_records;
+            CREATE VIEW v_processed_status_records AS
+            SELECT
+                status_primary_key,
+                datetime(processed_at / 1000.0, 'unixepoch') AS processed_at_utc,
+                participant,
+                remote_jid,
+                chat_scope,
+                source_type,
+                status_category,
+                media_type,
+                message_id,
+                content_signature,
+                display_name,
+                owner_mark
+            FROM processed_status_records;
+
+            DROP VIEW IF EXISTS v_pending_status_backlog;
+            CREATE VIEW v_pending_status_backlog AS
+            SELECT
+                queue_key,
+                source_type,
+                content_source_type,
+                message_id,
+                remote_jid,
+                participant_jid,
+                status_category,
+                media_type,
+                source_jid,
+                source_name,
+                display_name,
+                datetime(created_at / 1000.0, 'unixepoch') AS created_at_utc,
+                datetime(updated_at / 1000.0, 'unixepoch') AS updated_at_utc,
+                attempts,
+                COALESCE(last_error, '') AS last_error,
+                owner_mark
+            FROM pending_status_backlog;
+
+            DROP VIEW IF EXISTS v_daily_status_reports;
+            CREATE VIEW v_daily_status_reports AS
+            SELECT
+                day_key,
+                datetime(generated_at / 1000.0, 'unixepoch') AS generated_at_utc,
+                summary_json,
+                owner_mark
+            FROM daily_status_reports;
+        `);
 
         antiSpamStatements = {
             hasFingerprint: antiSpamDb.prepare('SELECT 1 FROM processed_status_fingerprints WHERE fingerprint = ? LIMIT 1'),
@@ -449,33 +537,34 @@ function initAntiSpamStorage() {
                     remote_jid,
                     chat_scope,
                     source_type,
+                    status_category,
                     media_type,
                     message_id,
                     content_signature,
                     display_name,
                     owner_mark
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '© By John')
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '© By John')
             `),
             getStatusRecord: antiSpamDb.prepare(`
-                SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, media_type, message_id, content_signature, display_name
+                SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, status_category, media_type, message_id, content_signature, display_name
                 FROM processed_status_records
                 WHERE status_primary_key = ?
                 LIMIT 1
             `),
             findStatusRecordByRemoteMessage: antiSpamDb.prepare(`
-                SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, media_type, message_id, content_signature, display_name
+                SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, status_category, media_type, message_id, content_signature, display_name
                 FROM processed_status_records
                 WHERE remote_jid = ? AND message_id = ?
                 LIMIT 1
             `),
             findStatusRecordByParticipantMessageType: antiSpamDb.prepare(`
-                SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, media_type, message_id, content_signature, display_name
+                SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, status_category, media_type, message_id, content_signature, display_name
                 FROM processed_status_records
                 WHERE participant = ? AND message_id = ? AND media_type = ?
                 LIMIT 1
             `),
             findStatusRecordByContentSignature: antiSpamDb.prepare(`
-                SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, media_type, message_id, content_signature, display_name
+                SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, status_category, media_type, message_id, content_signature, display_name
                 FROM processed_status_records
                 WHERE content_signature = ?
                 LIMIT 1
@@ -494,7 +583,7 @@ function initAntiSpamStorage() {
                 ORDER BY processed_at DESC, rowid DESC
             `),
             selectIntegrityStatusRows: antiSpamDb.prepare(`
-                SELECT rowid, status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, media_type, message_id, content_signature, display_name
+                SELECT rowid, status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, status_category, media_type, message_id, content_signature, display_name
                 FROM processed_status_records
                 ORDER BY processed_at DESC, rowid DESC
             `),
@@ -505,7 +594,7 @@ function initAntiSpamStorage() {
             `),
             updateStatusRecordRow: antiSpamDb.prepare(`
                 UPDATE processed_status_records
-                SET participant = ?, remote_jid = ?, chat_scope = ?, source_type = ?, media_type = ?, message_id = ?, content_signature = ?, display_name = ?
+                SET participant = ?, remote_jid = ?, chat_scope = ?, source_type = ?, status_category = ?, media_type = ?, message_id = ?, content_signature = ?, display_name = ?
                 WHERE rowid = ?
             `),
             deleteFingerprintRow: antiSpamDb.prepare('DELETE FROM processed_status_fingerprints WHERE rowid = ?'),
@@ -539,19 +628,37 @@ function initAntiSpamStorage() {
                     queue_key,
                     message_blob,
                     source_type,
+                    content_source_type,
+                    message_id,
+                    remote_jid,
+                    participant_jid,
+                    status_category,
+                    media_type,
+                    source_jid,
+                    source_name,
+                    display_name,
                     created_at,
                     updated_at,
                     attempts,
                     last_error,
                     owner_mark
-                ) VALUES (?, ?, ?, ?, ?, 0, NULL, '© By John')
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '© By John')
                 ON CONFLICT(queue_key) DO UPDATE SET
                     message_blob = excluded.message_blob,
                     source_type = excluded.source_type,
+                    content_source_type = excluded.content_source_type,
+                    message_id = excluded.message_id,
+                    remote_jid = excluded.remote_jid,
+                    participant_jid = excluded.participant_jid,
+                    status_category = excluded.status_category,
+                    media_type = excluded.media_type,
+                    source_jid = excluded.source_jid,
+                    source_name = excluded.source_name,
+                    display_name = excluded.display_name,
                     updated_at = excluded.updated_at
             `),
             selectPendingStatuses: antiSpamDb.prepare(`
-                SELECT queue_key, message_blob, source_type, created_at, updated_at, attempts, last_error
+                SELECT queue_key, message_blob, source_type, content_source_type, message_id, remote_jid, participant_jid, status_category, media_type, source_jid, source_name, display_name, created_at, updated_at, attempts, last_error
                 FROM pending_status_backlog
                 ORDER BY created_at ASC
                 LIMIT ?
@@ -588,6 +695,7 @@ function initAntiSpamStorage() {
                 statusRecord.remoteJid,
                 statusRecord.chatScope,
                 statusRecord.sourceType,
+                statusRecord.statusCategory,
                 statusRecord.mediaType,
                 statusRecord.messageId,
                 statusRecord.contentSignature,
@@ -656,6 +764,7 @@ function buildStatusRecordProbe(msg, participant, mediaInfo, identity = null) {
     const normalizedMessageId = normalizeStorageString(msg?.key?.id || '', 255);
     const normalizedMediaType = normalizeStorageString(mediaInfo?.type || '', 50);
     const normalizedSourceType = normalizeStorageString(mediaInfo?.sourceType || '', 50);
+    const normalizedStatusCategory = normalizeStorageString(mediaInfo?.statusCategory || '', 50);
     const normalizedChatScope = normalizeStorageString(detectMessageScope(msg), 50);
     const normalizedDisplayName = normalizeStorageString(identity?.displayName || '', 255);
     const normalizedContentSignature = normalizeStorageString(buildStatusContentSignature(msg, participant, mediaInfo), 255);
@@ -666,6 +775,7 @@ function buildStatusRecordProbe(msg, participant, mediaInfo, identity = null) {
         messageId: normalizedMessageId,
         mediaType: normalizedMediaType,
         sourceType: normalizedSourceType,
+        statusCategory: normalizedStatusCategory,
         chatScope: normalizedChatScope,
         displayName: normalizedDisplayName,
         contentSignature: normalizedContentSignature
@@ -1586,6 +1696,7 @@ function runSqliteIntegrityCheck(reason = 'interval_10m') {
             const normalizedRemoteJid = normalizeStorageIdentity(row.remote_jid || '').value;
             const normalizedChatScope = normalizeStorageString(row.chat_scope || '', 50);
             const normalizedSourceType = normalizeStorageString(row.source_type || '', 50);
+            const normalizedStatusCategory = normalizeStorageString(row.status_category || '', 50);
             const normalizedMediaType = normalizeStorageString(row.media_type || '', 50);
             const normalizedMessageId = normalizeStorageString(row.message_id || '', 255);
             const normalizedContentSignature = normalizeStorageString(row.content_signature || '', 255);
@@ -1613,6 +1724,7 @@ function runSqliteIntegrityCheck(reason = 'interval_10m') {
                 || normalizedRemoteJid !== String(row.remote_jid || '')
                 || normalizedChatScope !== String(row.chat_scope || '')
                 || normalizedSourceType !== String(row.source_type || '')
+                || normalizedStatusCategory !== String(row.status_category || '')
                 || normalizedMediaType !== String(row.media_type || '')
                 || normalizedMessageId !== String(row.message_id || '')
                 || normalizedContentSignature !== String(row.content_signature || '')
@@ -1623,6 +1735,7 @@ function runSqliteIntegrityCheck(reason = 'interval_10m') {
                     normalizedRemoteJid,
                     normalizedChatScope,
                     normalizedSourceType,
+                    normalizedStatusCategory,
                     normalizedMediaType,
                     normalizedMessageId,
                     normalizedContentSignature,
@@ -2329,10 +2442,23 @@ function inspectStatusEnvelope(message, wrappers = []) {
     return { content: message, wrappers, topLevelKeys: getActiveMessageKeys(message) };
 }
 
+function isActualStatusMessage(msg, envelope = null) {
+    if (msg?.key?.remoteJid === 'status@broadcast') return true;
+    const wrapperSet = new Set(envelope?.wrappers || []);
+    return [...wrapperSet].some((wrapper) => [
+        'statusMentionMessage',
+        'groupStatusMentionMessage',
+        'groupStatusMessage',
+        'groupStatusMessageV2'
+    ].includes(wrapper));
+}
+
 function detectStatusCategory(msg, envelope) {
     const wrapperSet = new Set(envelope?.wrappers || []);
     const originInfo = extractStatusOriginInfo(envelope?.content);
-    if (originInfo.sourceType === 'newsletter') return 'channel_forwarded';
+    if (originInfo.sourceType === 'newsletter') {
+        return isActualStatusMessage(msg, envelope) ? 'channel_status' : 'channel_forwarded_chat';
+    }
     if (wrapperSet.has('groupStatusMentionMessage')) return 'group_status_mention';
     if (wrapperSet.has('statusMentionMessage')) return 'status_mention';
     if (wrapperSet.has('groupStatusMessageV2')) return 'group_status_v2';
@@ -2343,7 +2469,7 @@ function detectStatusCategory(msg, envelope) {
 
 function isStatusLikeMessage(msg) {
     if (!msg?.message) return false;
-    if (msg.key?.remoteJid === 'status@broadcast') return true;
+    if (isActualStatusMessage(msg, inspectStatusEnvelope(msg.message))) return true;
     if (FORWARDED_CHANNEL_MEDIA_ENABLED && isForwardedChannelMediaMessage(msg)) return true;
     const topLevelKeys = getActiveMessageKeys(msg.message);
     return topLevelKeys.some((key) => [
@@ -2359,6 +2485,8 @@ function isForwardedChannelMediaMessage(msg) {
     const envelope = inspectStatusEnvelope(msg.message);
     const originInfo = extractStatusOriginInfo(envelope.content);
     if (originInfo.sourceType !== 'newsletter') return false;
+    const mediaInfo = extractStatusMediaInfo(msg.message, msg);
+    if (!mediaInfo || !['image', 'video', 'audio', 'document', 'sticker'].includes(mediaInfo.type)) return false;
     if (!FORWARDED_CHANNEL_MEDIA_OWNER_ONLY) return true;
     const senderCandidates = [
         msg?.key?.remoteJid,
@@ -3740,16 +3868,44 @@ function deserializeStatusMessage(blob) {
     }
 }
 
+function buildPendingStatusMetadata(message, sourceType = 'live') {
+    const mediaInfo = extractStatusMediaInfo(message?.message, message) || {};
+    const participantJid = getStatusSourceParticipant(message, mediaInfo);
+    const identity = resolveContactIdentity(participantJid, message);
+    return {
+        eventSourceType: normalizeStorageString(sourceType, 50) || 'live',
+        contentSourceType: normalizeStorageString(mediaInfo.sourceType || '', 50),
+        messageId: normalizeStorageString(message?.key?.id || '', 255),
+        remoteJid: normalizeStorageIdentity(message?.key?.remoteJid || '').value,
+        participantJid: normalizeStorageIdentity(participantJid).value,
+        statusCategory: normalizeStorageString(mediaInfo.statusCategory || '', 50),
+        mediaType: normalizeStorageString(mediaInfo.type || '', 50),
+        sourceJid: normalizeStorageIdentity(mediaInfo.sourceJid || '').value,
+        sourceName: normalizeStorageString(mediaInfo.sourceName || '', 255),
+        displayName: normalizeStorageString(identity?.displayName || '', 255)
+    };
+}
+
 function persistPendingStatusTask(task, sourceType = 'live') {
     if (!antiSpamStatements?.upsertPendingStatus || !task?.message || !task.queueKey) return;
     const messageBlob = serializeStatusMessage(task.message);
     if (!messageBlob) return;
     try {
         const now = Date.now();
+        const metadata = buildPendingStatusMetadata(task.message, sourceType);
         antiSpamStatements.upsertPendingStatus.run(
             task.queueKey,
             messageBlob,
-            sourceType,
+            metadata.eventSourceType,
+            metadata.contentSourceType,
+            metadata.messageId,
+            metadata.remoteJid,
+            metadata.participantJid,
+            metadata.statusCategory,
+            metadata.mediaType,
+            metadata.sourceJid,
+            metadata.sourceName,
+            metadata.displayName,
             Number(task.createdAt || now),
             now
         );
@@ -4147,7 +4303,9 @@ async function forwardStatusMedia(sock, msg) {
     }
 
     try {
-        if (mediaInfo.sourceType !== 'newsletter') {
+        const isChannelForwardedStatus = mediaInfo.sourceType === 'newsletter' && isActualStatusMessage(msg, mediaInfo.envelope);
+        const isDirectForwardedChannelMedia = mediaInfo.sourceType === 'newsletter' && !isChannelForwardedStatus;
+        if (!isDirectForwardedChannelMedia) {
             await simulateNaturalStatusView(sock, msg, mediaInfo, identity);
             if (POST_READ_LIKE_DELAY_MS > 0) {
                 await delay(POST_READ_LIKE_DELAY_MS);
@@ -4155,6 +4313,9 @@ async function forwardStatusMedia(sock, msg) {
             const likeResult = await sendStatusLike(sock, msg, participant, mediaInfo, identity, getQueueMessageKey(msg, mediaInfo));
             if (likeResult?.confirmed === false && likeResult?.reason === 'verification_timeout') {
                 recordAudit('status_like_not_confirmed_but_forward_continued', buildMessageMeta(msg, mediaInfo, identity), 'warn');
+            }
+            if (isChannelForwardedStatus) {
+                recordAudit('channel_status_like_processed', buildMessageMeta(msg, mediaInfo, identity), 'info');
             }
         } else {
             recordAudit('forwarded_channel_media_forward_only', buildMessageMeta(msg, mediaInfo, identity), 'info');

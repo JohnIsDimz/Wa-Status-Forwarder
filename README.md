@@ -19,11 +19,12 @@ Bot hanya memproses data yang memang diterima oleh akun WhatsApp tertaut. Sumber
 | Status kontak biasa | Didukung | Dibaca dari event Status/Stories `status@broadcast` dan diteruskan ke Telegram jika terlihat oleh akun bot |
 | Group Status | Didukung | Wrapper `groupStatusMessage`, `groupStatusMessageV2`, dan status mention dikenali sebagai status; sumber dan participant dipertahankan pada metadata |
 | Pesan biasa di grup | Tidak termasuk pipeline Status | Tidak diteruskan hanya karena berasal dari grup; bot tetap fokus pada Status/Stories |
-| Media dari saluran/newsletter yang diteruskan ke bot | Didukung secara aman | Jika pemilik/pengguna meneruskan media channel ke chat bot, metadata `forwardedNewsletterMessageInfo` dibaca lalu media diteruskan ke Telegram dengan label saluran |
-| Pesan channel langsung | Tidak diambil otomatis | Bot tidak melakukan pembacaan langsung atau scraping channel; hanya media yang benar-benar diterima sebagai forward yang diproses |
+| Media dari saluran/newsletter yang diteruskan ke chat biasa | Didukung secara terbatas | Jika pemilik/pengguna meneruskan media channel ke chat biasa, metadata `forwardedNewsletterMessageInfo` dibaca lalu media diteruskan ke Telegram dengan label saluran; tidak diperlakukan sebagai Status dan tidak diberi auto-like Status |
+| Konten channel yang benar-benar masuk sebagai Status | Didukung penuh dalam pipeline Status | Jika event yang diterima memiliki `remoteJid=status@broadcast` atau wrapper Status yang didukung, asal channel tetap ditampilkan tetapi konten masuk jalur Status normal, termasuk natural view, auto-like, verifikasi reaction, deduplikasi, dan backlog |
+| Pesan channel langsung | Tidak diambil otomatis | Bot tidak melakukan pembacaan langsung atau scraping channel; hanya media yang benar-benar diterima oleh akun tertaut yang diproses |
 | View Once | Tidak diteruskan | Tetap dilewati untuk menghormati kontrol sementara dan privasi pesan |
 
-Media channel yang diteruskan tidak diberi auto-like Status karena bukan Status asli. Event tersebut dicatat sebagai `forwarded_channel_media_forward_only` dan dikirim ke Telegram menggunakan kategori `CHANNEL FORWARDED` serta nama saluran jika metadata tersedia. Opsi `forwardedChannelMediaEnabled` dan `forwardedChannelMediaOwnerOnly` tersedia di `config.js`.
+> **Batas penting:** bot tidak membaca atau meneruskan seluruh chat. Pipeline hanya menerima Status/Stories, Group Status, wrapper Status yang relevan, serta media channel yang memang dikirim sebagai forward dan diizinkan oleh konfigurasi. Forward channel ke chat biasa dicatat sebagai `channel_forwarded_chat` dan `forwarded_channel_media_forward_only`; konten channel yang masuk sebagai Status dicatat sebagai `channel_status` dan menggunakan auto-like Status biasa. Opsi `forwardedChannelMediaEnabled` dan `forwardedChannelMediaOwnerOnly` tersedia di `config.js`.
 
 ## Penguatan penangkapan sinyal status
 
@@ -106,7 +107,7 @@ Untuk pemeriksaan sintaks JavaScript:
 npm test
 ```
 
-Perintah `npm test` menjalankan `node --check` terhadap `index.js`, `node.js`, `runner.js`, dan `config.js`.
+Perintah `npm test` menjalankan `node --check` terhadap `index.js`, `node.js`, `runner.js`, `config.js`, dan utilitas inspeksi database.
 
 ## Konfigurasi
 
@@ -239,7 +240,49 @@ Telegram Bot API menggunakan HTTPS dan mendukung JSON untuk request biasa serta 
 
 Status yang terdeteksi tetapi belum selesai diteruskan disimpan di tabel SQLite `pending_status_backlog`. Payload diserialisasi menggunakan serializer bawaan Node.js agar field binary pada media dan key PN/LID dapat dipulihkan. Setelah socket menerima `receivedPendingNotifications`, bot memuat backlog tersebut, melewati status yang sudah kedaluwarsa, lalu mengirimkannya melalui queue dengan socket yang aktif. Row backlog baru dihapus setelah task selesai atau dilewati secara permanen; kegagalan sementara tetap meninggalkan row untuk recovery berikutnya.
 
-Untuk auto-like, status reaction memakai `sock.sendMessage('status@broadcast', { react: { text, key } }, { statusJidList })` dengan key status asli dan alias participant PN/LID yang tersedia. Baileys mendukung format reaction umum dengan key pesan dan mendefinisikan `statusJidList` sebagai daftar participant untuk relay status. [9] Karena promise berhasil tidak selalu membuktikan reaction sudah terlihat di WhatsApp, bot menunggu event echo `messages.reaction` atau own reaction event. Console tidak lagi menulis `liked` sebelum verifikasi; hasil yang timeout dicatat sebagai `status_like_sent_unconfirmed`.
+### Struktur SQLite yang readable
+
+Database mempertahankan payload internal `message_blob` untuk kebutuhan recovery, tetapi operator tidak perlu membaca blob tersebut. Metadata penting juga disimpan dalam kolom terpisah: `message_id`, `remote_jid`, `participant_jid`, `status_category`, `media_type`, `content_source_type`, `source_jid`, `source_name`, dan `display_name`. Pada startup, database lama dimigrasikan secara aman dengan `ALTER TABLE` hanya untuk kolom yang belum ada.
+
+Tiga view berikut menyediakan tampilan yang lebih mudah dibaca dan mengubah epoch milliseconds menjadi waktu UTC:
+
+| View | Isi |
+|---|---|
+| `v_processed_status_records` | Riwayat status yang sudah diproses, termasuk kategori, tipe media, pengirim, dan signature deduplikasi |
+| `v_pending_status_backlog` | Antrian status yang belum selesai dengan metadata pesan, asal konten, jumlah percobaan, dan waktu pembuatan/perubahan |
+| `v_daily_status_reports` | Ringkasan laporan harian dengan waktu pembuatan yang terbaca |
+
+Glossary metadata utama pada backlog adalah sebagai berikut:
+
+| Field | Arti |
+|---|---|
+| `source_type` | Asal event pipeline, misalnya `live`, `history`, atau `reconnect` |
+| `content_source_type` | Asal konten yang terdeteksi, misalnya `newsletter`, `group_status`, atau kosong untuk status biasa |
+| `status_category` | Kategori pemrosesan, misalnya `status_broadcast`, `group_status`, `channel_status`, atau `channel_forwarded_chat` |
+| `remote_jid` | Chat/event asal pesan yang diterima |
+| `participant_jid` | Identitas pengirim atau participant yang dipakai untuk resolusi status |
+| `source_jid` dan `source_name` | Identitas channel atau sumber attribution jika metadata WhatsApp menyediakannya |
+| `media_type` | Jenis payload yang diteruskan, seperti `image`, `video`, `audio`, `document`, `sticker`, atau `text` |
+| `attempts` dan `last_error` | Jumlah retry backlog dan error terakhir yang tercatat |
+
+Contoh pemeriksaan tanpa menampilkan payload binary:
+
+```sql
+SELECT message_id, status_category, media_type, content_source_type,
+       source_name, display_name, created_at_utc, attempts, last_error
+FROM v_pending_status_backlog
+ORDER BY created_at_utc DESC;
+
+SELECT status_primary_key, message_id, status_category, media_type,
+       participant, remote_jid, processed_at_utc
+FROM v_processed_status_records
+ORDER BY processed_at_utc DESC
+LIMIT 50;
+```
+
+Jangan menyalin `message_blob` ke log atau dashboard. Kolom tersebut adalah format internal Node.js dan dapat memuat struktur pesan yang hanya diperlukan untuk pemulihan job.
+
+Untuk auto-like, status reaction memakai `sock.sendMessage('status@broadcast', { react: { text, key } }, { statusJidList })` dengan key status asli dan alias participant PN/LID yang tersedia. Baileys mendukung format reaction umum dengan key pesan dan mendefinisikan `statusJidList` sebagai daftar participant untuk relay status. [9] Karena promise berhasil tidak selalu membuktikan reaction sudah terlihat di WhatsApp, bot menunggu event echo `messages.reaction` atau own reaction event. Console tidak lagi menulis `liked` sebelum verifikasi; hasil yang timeout dicatat sebagai `status_like_sent_unconfirmed`. Media channel yang hanya di-forward ke chat biasa sengaja tidak memakai endpoint reaction Status, sedangkan `channel_status` tetap memakai jalur reaction Status penuh.
 
 File berikut dapat dibuat ketika bot berjalan dan sebaiknya tidak di-commit:
 
@@ -371,10 +414,11 @@ WhatsApp Cloud API resmi perlu diperlakukan sebagai integrasi berbeda, bukan pen
 ## Perintah pengembangan
 
 ```bash
-npm ci       # instalasi deterministik dari package-lock.json
-npm test     # pemeriksaan sintaks
-npm start    # menjalankan runner dengan auto-restart
-npm run bot  # menjalankan bot langsung
+npm ci             # instalasi deterministik dari package-lock.json
+npm test           # pemeriksaan sintaks
+npm run db:inspect # tampilkan view SQLite readable tanpa message_blob
+npm start          # menjalankan runner dengan auto-restart
+npm run bot        # menjalankan bot langsung
 ```
 
 ## Dependency utama
