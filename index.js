@@ -1541,21 +1541,18 @@ function touchSignalHealth(signalKey, source = '') {
     saveHealthStore();
 }
 
-function buildSignalAuditLine(metricValue, signalState) {
+function buildSignalAuditLine(metricValue) {
     const countValue = Number(metricValue || 0);
-    if (countValue <= 0) return '0x | belum ada sinyal';
-    const lastText = formatLastSignalAt(signalState?.lastAt);
-    if (!lastText) return `${countValue}x | sudah tercatat`;
-    return `${countValue}x | terakhir ${lastText}`;
+    return countValue > 0 ? `${countValue}x | sudah ada sinyal` : '0x | belum ada sinyal';
 }
 
 function emitSignalAuditBox() {
     ensureSignalHealthStore();
     if (ULTRA_MINIMAL_CONSOLE) return;
     logSignalAudit({
-        statusLine: buildSignalAuditLine(metricsStore.statusDetected, healthStore.signalHealth.status),
-        antiCallLine: buildSignalAuditLine(metricsStore.callsRejected, healthStore.signalHealth.antiCall),
-        autoBlockLine: buildSignalAuditLine(metricsStore.callsBlocked, healthStore.signalHealth.autoBlock)
+        statusLine: buildSignalAuditLine(metricsStore.statusDetected),
+        antiCallLine: buildSignalAuditLine(metricsStore.callsRejected),
+        autoBlockLine: buildSignalAuditLine(metricsStore.callsBlocked)
     });
 }
 

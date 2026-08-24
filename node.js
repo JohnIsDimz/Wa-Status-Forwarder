@@ -177,8 +177,7 @@ function createConsoleHelpers(options = {}) {
         const rows = [
             { label: 'STATUS', value: summary.statusLine || '-', color: ANSI.cyan },
             { label: 'ANTICALL', value: summary.antiCallLine || '-', color: ANSI.yellow },
-            { label: 'AUTOBLOCK', value: summary.autoBlockLine || '-', color: ANSI.red },
-            { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
+            { label: 'AUTOBLOCK', value: summary.autoBlockLine || '-', color: ANSI.red }
         ];
         renderLabeledConsoleBox('SIGNAL AUDIT', ANSI.blue, rows);
     }
