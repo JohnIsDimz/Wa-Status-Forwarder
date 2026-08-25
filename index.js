@@ -3376,10 +3376,12 @@ async function sendToTelegram(buffer, mediaInfo, participant, msg) {
         updateHealth({ lastTelegramSuccessAt: new Date().toISOString() });
         return result;
     } catch (error) {
-        const isActualVideoStatus = mediaInfo.type === 'video'
-            && isActualStatusMessage(msg, mediaInfo.envelope || inspectStatusEnvelope(msg?.message));
-        if (isActualVideoStatus) {
-            void sendOperationalAlert('telegram_gagal_kirim_media', `video | ${error?.message || String(error)}`, { sendTelegram: false, sendWhatsapp: true });
+        const isActualStatus = isActualStatusMessage(msg, mediaInfo.envelope || inspectStatusEnvelope(msg?.message));
+        const isForwardedChannelMedia = mediaInfo.sourceType === 'newsletter';
+        const isEligibleMediaAlert = mediaInfo.type !== 'text' && (isActualStatus || isForwardedChannelMedia);
+        if (isEligibleMediaAlert) {
+            const mediaType = String(mediaInfo.type || 'media').toLowerCase();
+            void sendOperationalAlert('telegram_gagal_kirim_media', `${mediaType} | ${error?.message || String(error)}`, { sendTelegram: false, sendWhatsapp: true });
         }
         throw error;
     }
