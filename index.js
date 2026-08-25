@@ -310,7 +310,7 @@ function logAntiSpamStorageInfo(detail) {
     }
     antiSpamStorageInfoShown = true;
     pendingAntiSpamStorageInfoDetail = '';
-    logSystem('AI anti spam storage aktif', detail, 'ANTI SPAM', ANSI.green);
+    logSystem('Penyimpanan anti-spam aktif', detail, 'ANTI SPAM', ANSI.green);
 }
 
 function flushPostConnectSystemMessages() {
@@ -322,7 +322,7 @@ function flushPostConnectSystemMessages() {
 function warnAntiSpamStorage(detail) {
     if (antiSpamStorageWarned) return;
     antiSpamStorageWarned = true;
-    logSystem('AI anti spam storage warning', detail, 'ANTI SPAM', ANSI.yellow);
+    logSystem('Peringatan penyimpanan anti-spam', detail, 'ANTI SPAM', ANSI.yellow);
 }
 
 function initAntiSpamStorage() {
@@ -1192,7 +1192,7 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
         saveHealthStore();
         flushPendingSqliteDocumentWrites();
         const durationMs = Date.now() - startedAt;
-        logSystem('Databese berhasil di riset ulang', reason, 'STORAGE', ANSI.yellow);
+        logSystem('Database berhasil di-reset', reason, 'PENYIMPANAN', ANSI.yellow);
         if (!ULTRA_MINIMAL_CONSOLE) {
             logDailySummary(dailySummary);
             logDatabaseResetReport({
@@ -1204,7 +1204,7 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
             });
         }
     } catch (error) {
-        logError('Storage reset', error?.message || String(error));
+        logError('Reset penyimpanan gagal', error?.message || String(error));
     }
 }
 
@@ -1371,7 +1371,7 @@ function readJsonFileFromDisk(filePath, fallbackValue) {
     try {
         return JSON.parse(fs.readFileSync(filePath, 'utf8'));
     } catch (error) {
-        logError(`Read ${path.basename(filePath)}`, error.message);
+        logError(`Gagal membaca ${path.basename(filePath)}`, error.message);
         return fallbackValue;
     }
 }
@@ -2326,7 +2326,7 @@ function startPresenceKeepAlive(sock) {
         try {
             await sock.sendPresenceUpdate('available');
         } catch (error) {
-            logError('Presence', error.message);
+            logError('Pembaruan kehadiran WhatsApp gagal', error.message);
         }
     };
     sendAvailablePresence();
@@ -2337,11 +2337,11 @@ function scheduleReconnect() {
     if (reconnectTimeout) return;
 
     const nextCount = recordReconnectAttempt();
-    logError('Reconnect', `${Math.ceil(RECONNECT_DELAY_MS / 1000)} detik lagi | percobaan hari ini: ${nextCount}`);
+    logError('Koneksi ulang dijadwalkan', `${Math.ceil(RECONNECT_DELAY_MS / 1000)} detik lagi | percobaan hari ini: ${nextCount}`);
     reconnectTimeout = setTimeout(() => {
         reconnectTimeout = null;
         connectToWhatsApp().catch((error) => {
-            logError('Reconnect gagal', error.message);
+            logError('Koneksi ulang gagal', error.message);
             scheduleReconnect();
         });
     }, RECONNECT_DELAY_MS);
@@ -2498,7 +2498,7 @@ async function sendOperationalAlert(kind, message, options = {}) {
 function warnTelegramConfig() {
     if (telegramConfigWarned) return;
     telegramConfigWarned = true;
-    logError('Config', 'Telegram belum dikonfigurasi dengan benar di config.js');
+    logError('Konfigurasi Telegram', 'Telegram belum dikonfigurasi dengan benar di config.js');
 }
 
 function getActiveMessageKeys(message) {
@@ -3760,7 +3760,7 @@ async function sendStatusLike(sock, msg, participant, mediaInfo, identity, queue
     recordFailedJob('status_like', metaBase, lastPrimaryError?.message || 'auto_like_failed');
     updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `status_like:${lastPrimaryError?.message || 'failed'}` });
     recordAudit('status_like_failed', { ...metaBase, error: lastPrimaryError?.message || 'failed' }, 'warn');
-    logError('Auto like', lastPrimaryError?.message || 'gagal');
+    logError('Reaksi otomatis gagal', lastPrimaryError?.message || 'gagal');
     return { sent: false, confirmed: false, reason: lastPrimaryError?.message || 'failed' };
 }
 
@@ -3790,7 +3790,7 @@ async function applyAntiCallPrivacy(sock) {
     try {
         await sock.updateCallPrivacy(ANTI_CALL_PRIVACY_MODE);
     } catch (error) {
-        logError('Call privacy', error.message);
+                logError('Pengaturan privasi panggilan gagal', error.message);
     }
 }
 
@@ -3926,7 +3926,7 @@ async function handleIncomingCalls(sock, calls = []) {
         } catch (error) {
             recordFailedJob('call_handler', { from: call?.from || '', callId: call?.id || '' }, error?.message || String(error));
             updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `call_handler:${error?.message || error}` });
-            logError('Call handler', error.message);
+            logError('Penanganan panggilan gagal', error.message);
         }
     }
 }
@@ -4008,7 +4008,7 @@ async function drainStatusQueue() {
                 pendingQueueRetryTimers.add(retryTimer);
             } else {
                 if (current.queueKey) queuedStatusKeys.delete(current.queueKey);
-                logError('Queue', error.message);
+                logError('Antrean status gagal diproses', error.message);
             }
         }
     }
@@ -4671,7 +4671,7 @@ async function connectToWhatsApp() {
                     await requestPairingCode(sock, pairingState.phoneNumber);
                 } catch (error) {
                     pairingState.requested = false;
-                    logError('Pairing', error.message);
+                    logError('Pairing WhatsApp gagal', error.message);
                     void sendOperationalAlert('pairing_gagal', error?.message || String(error), { sendTelegram: true, sendWhatsapp: false });
                 }
             }
@@ -4731,11 +4731,11 @@ async function connectToWhatsApp() {
                 });
                 recordAudit('connection_close', { statusCode, shouldReconnect }, shouldReconnect ? 'warn' : 'error');
                 if (shouldReconnect) incrementMetric('reconnects', 1);
-                logError('WA disconnected', `reconnect=${shouldReconnect}`);
+                logError('WhatsApp terputus', `koneksi ulang=${shouldReconnect ? 'ya' : 'tidak'}`);
                 if (shouldReconnect) {
                     scheduleReconnect();
                 } else {
-                    logError('WA session logout');
+                    logError('Sesi WhatsApp keluar');
                     void sendOperationalAlert('sesi_logout', `statusCode=${statusCode || 'unknown'}`, { sendTelegram: true, sendWhatsapp: false });
                     if (!ULTRA_MINIMAL_CONSOLE && lastPhoneNumber) {
                         logPairInfo(lastPhoneNumber, 'Gunakan nomor ini untuk pairing ulang');
@@ -4794,7 +4794,7 @@ async function connectToWhatsApp() {
 }
 
 function gracefulShutdown(signal) {
-    if (!ULTRA_MINIMAL_CONSOLE) logSystem('Shutdown diminta', signal, 'SYSTEM', ANSI.blue);
+    if (!ULTRA_MINIMAL_CONSOLE) logSystem('Penghentian bot diminta', signal, 'SISTEM', ANSI.blue);
     stopPairingReminder();
     stopPresenceKeepAlive();
     stopSessionBackupLoop();
@@ -4811,7 +4811,7 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 process.on('uncaughtException', (error) => {
     const message = error?.message || String(error);
-    logError('uncaughtException', message);
+    logError('Kesalahan aplikasi tidak tertangani', message);
     updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `uncaughtException:${message}` });
     recordFailedJob('uncaughtException', {}, message);
     void sendOperationalAlert('runtime_error', message, { sendTelegram: true, sendWhatsapp: true });
@@ -4828,7 +4828,7 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason) => {
     const message = reason?.message || String(reason);
-    logError('unhandledRejection', message);
+    logError('Promise gagal ditangani', message);
     updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `unhandledRejection:${message}` });
     recordFailedJob('unhandledRejection', {}, message);
     stopPairingReminder();
@@ -4844,7 +4844,7 @@ process.on('unhandledRejection', (reason) => {
 
 connectToWhatsApp().catch((error) => {
     const message = error?.message || String(error);
-    logError('Startup', message);
+    logError('Startup gagal', message);
     updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `startup:${message}` });
     recordFailedJob('startup', {}, message);
     void sendOperationalAlert('startup_gagal', message, { sendTelegram: true, sendWhatsapp: false });

@@ -13,6 +13,7 @@ const MAX_RESTARTS_PER_WINDOW = 5;
 const RESTART_WINDOW_MS = 10 * 60 * 1000;
 const HEALTHY_UPTIME_MS = 2 * 60 * 1000;
 const FORCE_KILL_TIMEOUT_MS = 5000;
+const CONSOLE_CONTENT_WIDTH = 42;
 const EXIT_CODE_FATAL_CONFIG = 70;
 const EXIT_CODE_FATAL_STORAGE = 71;
 const NO_RESTART_EXIT_CODES = new Set([EXIT_CODE_FATAL_CONFIG, EXIT_CODE_FATAL_STORAGE]);
@@ -50,7 +51,7 @@ function paint(text, color) {
     return `${color}${text}${ANSI.reset}`;
 }
 
-function padLine(label, value, width = 44) {
+function padLine(label, value, width = CONSOLE_CONTENT_WIDTH) {
     const normalizedLabel = `${label}:`;
     const safeValue = String(value || '').slice(0, Math.max(0, width - normalizedLabel.length - 1));
     const rawLine = `${normalizedLabel} ${safeValue}`;
@@ -58,13 +59,13 @@ function padLine(label, value, width = 44) {
 }
 
 function renderConsoleBox(title, borderColor, lines) {
-    const boxWidth = 44;
+    const boxWidth = CONSOLE_CONTENT_WIDTH + 2;
     const topBorder = `┌${'─'.repeat(boxWidth)}┐`;
     const bottomBorder = `└${'─'.repeat(boxWidth)}┘`;
     console.log(paint(topBorder, borderColor));
-    console.log(`│${paint(title.padEnd(boxWidth), ANSI.bold)}│`);
+    console.log(`│ ${paint(title.padEnd(CONSOLE_CONTENT_WIDTH), ANSI.bold)} │`);
     for (const line of lines) {
-        console.log(`│${line}│`);
+        console.log(`│ ${line} │`);
     }
     console.log(paint(bottomBorder, borderColor));
 }
@@ -77,11 +78,14 @@ function formatDisplayDateTime() {
     })} WIB`;
 }
 
-function logError(message) {
-    renderConsoleBox(' RUNNER ERROR ', ANSI.red, [
-        paint(padLine('INFO', message, 44), ANSI.red),
-        paint(padLine('WAKTU', formatDisplayDateTime(), 44), ANSI.yellow)
-    ]);
+function logError(message, detail = '', reason = '') {
+    const lines = [
+        paint(padLine('PESAN', message), ANSI.red)
+    ];
+    if (detail) lines.push(paint(padLine('DETAIL', detail), ANSI.yellow));
+    if (reason) lines.push(paint(padLine('ALASAN', reason), ANSI.gray));
+    lines.push(paint(padLine('WAKTU', formatDisplayDateTime()), ANSI.yellow));
+    renderConsoleBox(' KESALAHAN SUPERVISOR ', ANSI.red, lines);
 }
 
 function pruneRestartTimes() {
@@ -114,13 +118,13 @@ function scheduleRestart(reason) {
     recordHealthyUptime();
 
     if (!canRestart()) {
-        logError(`Batas restart tercapai. Alasan terakhir: ${reason}`);
+        logError('Batas restart tercapai', '', reason);
         process.exit(1);
     }
 
     restartTimes.push(Date.now());
     const delayMs = getRestartDelayMs();
-    logError(`Bot restart dalam ${Math.ceil(delayMs / 1000)} detik. Alasan: ${reason}`);
+    logError('Bot akan dimulai ulang', `${Math.ceil(delayMs / 1000)} detik lagi`, reason);
 
     setTimeout(() => {
         if (!stopping) {
@@ -209,7 +213,7 @@ function startBot() {
         if (stopping) return;
         if (NO_RESTART_EXIT_CODES.has(code)) {
             const label = EXIT_CODE_LABELS[code] || 'fatal_exit';
-            logError(`Bot berhenti tanpa restart. Alasan: ${reason} | label=${label}`);
+            logError('Bot berhenti tanpa restart', reason, `kategori: ${label}`);
             process.exit(code || 0);
             return;
         }
@@ -219,7 +223,7 @@ function startBot() {
     child.on('error', (error) => {
         child = null;
         if (stopping) return;
-        scheduleRestart(`spawn error: ${error.message}`);
+        scheduleRestart(`gagal menjalankan proses bot: ${error.message}`);
     });
 }
 

@@ -28,6 +28,7 @@ function createConsoleHelpers(options = {}) {
     const showLikeLogs = options.showLikeLogs === true;
     const showCallLogs = options.showCallLogs === true;
     const ultraMinimal = options.ultraMinimal === true;
+    const consoleContentWidth = 42;
 
     function paint(text, color) {
         if (!colorize) return text;
@@ -63,19 +64,19 @@ function createConsoleHelpers(options = {}) {
     }
 
     function renderConsoleBox(title, borderColor, lines) {
-        const boxWidth = 44;
+        const boxWidth = consoleContentWidth + 2;
         const topBorder = `┌${'─'.repeat(boxWidth)}┐`;
         const bottomBorder = `└${'─'.repeat(boxWidth)}┘`;
         console.log(paint(topBorder, borderColor));
-        console.log(`│${paint(title.padEnd(boxWidth), ANSI.bold)}│`);
+        console.log(`│ ${paint(title.padEnd(consoleContentWidth), ANSI.bold)} │`);
         for (const line of lines) {
-            console.log(`│${line}│`);
+            console.log(`│ ${line} │`);
         }
         console.log(paint(bottomBorder, borderColor));
     }
 
     function renderLabeledConsoleBox(title, borderColor, rows = []) {
-        const lines = rows.map(({ label, value, color = ANSI.gray }) => paint(padLine(label, value, 44), color));
+        const lines = rows.map(({ label, value, color = ANSI.gray }) => paint(padLine(label, value, consoleContentWidth), color));
         renderConsoleBox(` ${title} `, borderColor, lines);
     }
 
@@ -92,45 +93,45 @@ function createConsoleHelpers(options = {}) {
     }
 
     function logBoot(message) {
-        renderLabeledConsoleBox('BOOT', ANSI.cyan, [
-            { label: 'JOHN', value: 'STARTING', color: ANSI.cyan },
-            { label: 'INFO', value: message, color: ANSI.green },
+        renderLabeledConsoleBox('MEMULAI BOT', ANSI.cyan, [
+            { label: 'APLIKASI', value: 'MEMULAI', color: ANSI.cyan },
+            { label: 'KETERANGAN', value: message, color: ANSI.green },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ]);
     }
 
     function logCode(message) {
-        renderLabeledConsoleBox('PAIR CODE', ANSI.yellow, [
+        renderLabeledConsoleBox('KODE PAIRING', ANSI.yellow, [
             { label: 'KODE', value: message, color: `${ANSI.bold}${ANSI.yellow}` },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ]);
     }
 
     function logPairInfo(phoneNumber, detail = 'Buka WhatsApp lalu tautkan perangkat') {
-        renderLabeledConsoleBox('PAIR INFO', ANSI.yellow, [
+        renderLabeledConsoleBox('INFO PAIRING', ANSI.yellow, [
             { label: 'NOMOR', value: phoneNumber, color: ANSI.cyan },
-            { label: 'INFO', value: detail, color: ANSI.green },
+            { label: 'TINDAKAN', value: detail, color: ANSI.green },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ]);
     }
 
     function logWaConnecting() {
-        renderLabeledConsoleBox('WHATSAPP CONNECTING', ANSI.blue, [
-            { label: 'STATUS', value: 'CONNECTING', color: ANSI.blue },
+        renderLabeledConsoleBox('WHATSAPP', ANSI.blue, [
+            { label: 'STATUS', value: 'MENGHUBUNGKAN', color: ANSI.blue },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ]);
     }
 
     function logWaConnected() {
-        renderLabeledConsoleBox('WHATSAPP CONNECTED', ANSI.green, [
-            { label: 'STATUS', value: 'CONNECTED', color: ANSI.green },
+        renderLabeledConsoleBox('WHATSAPP', ANSI.green, [
+            { label: 'STATUS', value: 'TERHUBUNG', color: ANSI.green },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ]);
     }
 
-    function logSystem(message, detail = '', title = 'SYSTEM', borderColor = ANSI.blue) {
+    function logSystem(message, detail = '', title = 'SISTEM', borderColor = ANSI.blue) {
         const rows = [
-            { label: 'INFO', value: message, color: ANSI.green }
+            { label: 'PESAN', value: message, color: ANSI.green }
         ];
         if (detail) {
             rows.push({ label: 'DETAIL', value: detail, color: ANSI.yellow });
@@ -140,15 +141,15 @@ function createConsoleHelpers(options = {}) {
     }
 
     function logHistory(message) {
-        logSystem(message, '', 'HISTORY', ANSI.blue);
+        logSystem(message, '', 'RIWAYAT STATUS', ANSI.blue);
     }
 
     function logDebug(message, detail = '') {
-        logSystem(message, detail, 'DEBUG', ANSI.gray);
+        logSystem(message, detail, 'DIAGNOSTIK', ANSI.gray);
     }
 
     function logWait(phoneNumber) {
-        logSystem('Menunggu koneksi WhatsApp', phoneNumber, 'WAIT', ANSI.yellow);
+        logSystem('Menunggu koneksi WhatsApp', phoneNumber, 'MENUNGGU KONEKSI', ANSI.yellow);
     }
 
     function logDatabaseCheck(summary = {}) {
@@ -177,10 +178,10 @@ function createConsoleHelpers(options = {}) {
     function logSignalAudit(summary = {}) {
         const rows = [
             { label: 'STATUS', value: summary.statusLine || '-', color: ANSI.cyan },
-            { label: 'ANTICALL', value: summary.antiCallLine || '-', color: ANSI.yellow },
-            { label: 'AUTOBLOCK', value: summary.autoBlockLine || '-', color: ANSI.red }
+            { label: 'ANTI-PANGGILAN', value: summary.antiCallLine || '-', color: ANSI.yellow },
+            { label: 'BLOKIR OTOMATIS', value: summary.autoBlockLine || '-', color: ANSI.red }
         ];
-        renderLabeledConsoleBox('SIGNAL AUDIT', ANSI.blue, rows);
+        renderLabeledConsoleBox('PEMERIKSAAN SINYAL', ANSI.blue, rows);
     }
 
     function logDailySummary(summary = {}) {
@@ -189,45 +190,50 @@ function createConsoleHelpers(options = {}) {
         const failedCount = Array.isArray(summary.failures) ? summary.failures.length : 0;
         const rows = [
             { label: 'HARI', value: summary.dayKey || '-', color: ANSI.cyan },
-            { label: 'IMAGE', value: String(totals.image || 0), color: ANSI.magenta },
-            { label: 'VIDEO', value: String(totals.video || 0), color: ANSI.red },
-            { label: 'AUDIO', value: String(totals.audio || 0), color: ANSI.yellow },
-            { label: 'DOC', value: String(totals.document || 0), color: ANSI.blue },
-            { label: 'FORWARD', value: String(totals.forwarded || 0), color: ANSI.green },
-            { label: 'FAILED', value: String(failedCount), color: ANSI.red },
-            { label: 'TOP', value: topUploader ? `${topUploader.displayName} (${topUploader.total})` : '-', color: ANSI.green },
+            { label: 'GAMBAR', value: `${totals.image || 0} media`, color: ANSI.magenta },
+            { label: 'VIDEO', value: `${totals.video || 0} media`, color: ANSI.red },
+            { label: 'AUDIO', value: `${totals.audio || 0} media`, color: ANSI.yellow },
+            { label: 'DOKUMEN', value: `${totals.document || 0} media`, color: ANSI.blue },
+            { label: 'DITERUSKAN', value: `${totals.forwarded || 0} media`, color: ANSI.green },
+            { label: 'GAGAL', value: `${failedCount} media`, color: ANSI.red },
+            { label: 'PENGIRIM UTAMA', value: topUploader ? `${topUploader.displayName} (${topUploader.total} media)` : '-', color: ANSI.green },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ];
-        renderLabeledConsoleBox('DAILY SUMMARY', ANSI.green, rows);
+        renderLabeledConsoleBox('RINGKASAN HARIAN', ANSI.green, rows);
     }
 
     function logDatabaseResetReport(summary = {}) {
         const rows = [
-            { label: 'FP', value: String(summary.fingerprintRowsCleared ?? 0), color: ANSI.magenta },
-            { label: 'RECORD', value: String(summary.statusRecordRowsCleared ?? 0), color: ANSI.blue },
-            { label: 'DOC', value: String(summary.documentRowsCleared ?? 0), color: ANSI.green },
-            { label: 'DURASI', value: summary.durationMs != null ? `${summary.durationMs} ms` : '-', color: ANSI.yellow },
-            { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
+            { label: 'FINGERPRINT', value: `${summary.fingerprintRowsCleared ?? 0} kunci`, color: ANSI.magenta },
+            { label: 'RECORD STATUS', value: `${summary.statusRecordRowsCleared ?? 0} record`, color: ANSI.blue },
+            { label: 'DOKUMEN STATE', value: `${summary.documentRowsCleared ?? 0} dokumen`, color: ANSI.green },
+            { label: 'DURASI', value: summary.durationMs != null ? `${summary.durationMs} ms` : '-', color: ANSI.yellow }
         ];
         if (summary.reason) {
-            rows.splice(4, 0, { label: 'ALASAN', value: summary.reason, color: ANSI.gray });
+            rows.push({ label: 'ALASAN RESET', value: summary.reason, color: ANSI.gray });
         }
-        renderLabeledConsoleBox('DATABASE RESET REPORT', ANSI.yellow, rows);
+        rows.push({ label: 'SELESAI PADA', value: formatDisplayDateTime(), color: ANSI.yellow });
+        renderLabeledConsoleBox('LAPORAN RESET DATABASE', ANSI.yellow, rows);
     }
 
     function logDuplicateSkip(identity, mediaInfo, reason = '', statusKey = '') {
         const borderColor = getMediaTypeColor(mediaInfo?.type);
+        const reasonText = {
+            duplicate: 'Duplikat terdeteksi',
+            'precheck duplicate': 'Sudah tercatat sebelum diproses',
+            'buffer duplicate': 'Duplikat sedang diproses'
+        }[String(reason || '').toLowerCase()] || reason || 'Duplikat terdeteksi';
         const rows = [
-            { label: 'NAMA', value: identity?.displayName || '-', color: ANSI.green },
-            { label: 'ID', value: identity?.preferredJid || identity?.jid || identity?.number || '-', color: ANSI.cyan },
-            { label: 'JENIS', value: String(mediaInfo?.type || 'UNKNOWN').toUpperCase(), color: borderColor },
-            { label: 'ALASAN', value: reason || 'duplicate', color: ANSI.yellow }
+            { label: 'NAMA KONTAK', value: identity?.displayName || '-', color: ANSI.green },
+            { label: 'ID KONTAK', value: identity?.preferredJid || identity?.jid || identity?.number || '-', color: ANSI.cyan },
+            { label: 'JENIS MEDIA', value: String(mediaInfo?.type || 'UNKNOWN').toUpperCase(), color: borderColor },
+            { label: 'ALASAN', value: reasonText, color: ANSI.yellow }
         ];
         if (statusKey) {
-            rows.push({ label: 'KEY', value: statusKey, color: ANSI.gray });
+            rows.push({ label: 'KUNCI STATUS', value: statusKey, color: ANSI.gray });
         }
         rows.push({ label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow });
-        renderLabeledConsoleBox('DUPLICATE SKIP', borderColor, rows);
+        renderLabeledConsoleBox('DUPLIKAT DIABAIKAN', borderColor, rows);
     }
 
     function logError(message, detail = '') {
@@ -238,26 +244,26 @@ function createConsoleHelpers(options = {}) {
             rows.push({ label: 'DETAIL', value: detail, color: ANSI.yellow });
         }
         rows.push({ label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow });
-        renderLabeledConsoleBox('ERROR', ANSI.red, rows);
+        renderLabeledConsoleBox('KESALAHAN', ANSI.red, rows);
     }
 
     function logVerbose(message) {
         if (!ultraMinimal) {
-            logSystem(message, '', 'SYSTEM', ANSI.gray);
+            logSystem(message, '', 'SISTEM', ANSI.gray);
         }
     }
 
     function logSend(mediaInfo, identity, statusCategory) {
         if (!showSendLogs) return;
         const borderColor = getMediaTypeColor(mediaInfo.type);
-        const title = ` SEND ${String(mediaInfo.type || '').toUpperCase()} `;
+        const title = ` KIRIM ${String(mediaInfo.type || '').toUpperCase()} `;
         const lines = [
-            paint(padLine('NAMA', identity.displayName, 44), ANSI.green),
-            paint(padLine('NOMOR', identity.number, 44), ANSI.cyan),
-            paint(padLine('SIMPAN', identity.isUserSaved ? 'IYA' : 'TIDAK', 44), identity.isUserSaved ? ANSI.green : ANSI.yellow),
-            paint(padLine('JENIS', String(mediaInfo.type || '').toUpperCase(), 44), getMediaTypeColor(mediaInfo.type)),
-            paint(padLine('JAM', formatSendTime(), 44), ANSI.yellow),
-            paint(padLine('MODE', statusCategory, 44), ANSI.blue)
+            paint(padLine('NAMA KONTAK', identity.displayName, consoleContentWidth), ANSI.green),
+            paint(padLine('NOMOR KONTAK', identity.number, consoleContentWidth), ANSI.cyan),
+            paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow),
+            paint(padLine('JENIS MEDIA', String(mediaInfo.type || '').toUpperCase(), consoleContentWidth), getMediaTypeColor(mediaInfo.type)),
+            paint(padLine('WAKTU KIRIM', formatSendTime(), consoleContentWidth), ANSI.yellow),
+            paint(padLine('KATEGORI', statusCategory, consoleContentWidth), ANSI.blue)
         ];
         renderConsoleBox(title, borderColor, lines);
     }
@@ -265,28 +271,31 @@ function createConsoleHelpers(options = {}) {
     function logLike(identity, mediaInfo) {
         if (!showLikeLogs) return;
         const borderColor = getMediaTypeColor(mediaInfo.type);
-        const title = ` LIKE ${autoLikeEmoji} ${String(mediaInfo.type || '').toUpperCase()} `;
+        const title = ` REAKSI ${autoLikeEmoji} ${String(mediaInfo.type || '').toUpperCase()} `;
         const lines = [
-            paint(padLine('NAMA', identity.displayName, 44), ANSI.green),
-            paint(padLine('NOMOR', identity.number, 44), ANSI.cyan),
-            paint(padLine('SIMPAN', identity.isUserSaved ? 'IYA' : 'TIDAK', 44), identity.isUserSaved ? ANSI.green : ANSI.yellow),
-            paint(padLine('JENIS', String(mediaInfo.type || '').toUpperCase(), 44), getMediaTypeColor(mediaInfo.type)),
-            paint(padLine('JAM', formatSendTime(), 44), ANSI.yellow)
+            paint(padLine('NAMA KONTAK', identity.displayName, consoleContentWidth), ANSI.green),
+            paint(padLine('NOMOR KONTAK', identity.number, consoleContentWidth), ANSI.cyan),
+            paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow),
+            paint(padLine('JENIS MEDIA', String(mediaInfo.type || '').toUpperCase(), consoleContentWidth), getMediaTypeColor(mediaInfo.type)),
+            paint(padLine('WAKTU REAKSI', formatSendTime(), consoleContentWidth), ANSI.yellow)
         ];
         renderConsoleBox(title, borderColor, lines);
     }
 
     function logCall(call, identity, action) {
         if (!showCallLogs) return;
-        const kindText = call?.isVideo ? 'VIDEO' : 'VOICE';
+        const kindText = call?.isVideo ? 'VIDEO' : 'SUARA';
+        const actionText = { REJECT: 'DITOLAK', BLOCK: 'DIBLOKIR' }[String(action || '').toUpperCase()] || String(action || 'DIPROSES').toUpperCase();
+        const callStatus = String(call?.status || 'unknown').toUpperCase();
+        const callStatusText = { REJECT: 'DITOLAK', BLOCK: 'DIBLOKIR', RINGING: 'BERDERING' }[callStatus] || callStatus;
         const borderColor = call?.isVideo ? ANSI.magenta : ANSI.red;
-        const title = ` CALL ${action} ${kindText} `;
+        const title = ` PANGGILAN ${actionText} ${kindText} `;
         const lines = [
-            paint(padLine('NAMA', identity.displayName, 44), ANSI.green),
-            paint(padLine('NOMOR', identity.number, 44), ANSI.cyan),
-            paint(padLine('SIMPAN', identity.isUserSaved ? 'IYA' : 'TIDAK', 44), identity.isUserSaved ? ANSI.green : ANSI.yellow),
-            paint(padLine('STATUS', String(call?.status || 'unknown').toUpperCase(), 44), ANSI.red),
-            paint(padLine('JAM', formatSendTime(), 44), ANSI.yellow)
+            paint(padLine('NAMA KONTAK', identity.displayName, consoleContentWidth), ANSI.green),
+            paint(padLine('NOMOR KONTAK', identity.number, consoleContentWidth), ANSI.cyan),
+            paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow),
+            paint(padLine('STATUS PANGGILAN', callStatusText, consoleContentWidth), ANSI.red),
+            paint(padLine('WAKTU PROSES', formatSendTime(), consoleContentWidth), ANSI.yellow)
         ];
         renderConsoleBox(title, borderColor, lines);
     }
