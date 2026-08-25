@@ -152,24 +152,25 @@ function createConsoleHelpers(options = {}) {
     }
 
     function logDatabaseCheck(summary = {}) {
+        const quickCheck = String(summary.quickCheck || 'ok').toLowerCase();
         const rows = [
             { label: 'STATUS', value: summary.status || 'OK', color: summary.status === 'WARNING' ? ANSI.yellow : ANSI.green },
-            { label: 'QUICK', value: summary.quickCheck || 'ok', color: summary.quickCheck === 'ok' ? ANSI.green : ANSI.yellow },
-            { label: 'SCAN', value: String(summary.scannedRows ?? 0), color: ANSI.cyan },
-            { label: 'RECORD', value: String(summary.statusRecordRows ?? 0), color: ANSI.blue },
-            { label: 'FP', value: String(summary.fingerprintRows ?? 0), color: ANSI.magenta },
-            { label: 'DOC', value: String(summary.documentRows ?? 0), color: ANSI.green }
+            { label: 'INTEGRITAS', value: quickCheck === 'ok' ? 'Database konsisten' : quickCheck.toUpperCase(), color: quickCheck === 'ok' ? ANSI.green : ANSI.yellow },
+            { label: 'BARIS DIPERIKSA', value: `${summary.scannedRows ?? 0} baris`, color: ANSI.cyan },
+            { label: 'RECORD STATUS', value: `${summary.statusRecordRows ?? 0} record`, color: ANSI.blue },
+            { label: 'FINGERPRINT', value: `${summary.fingerprintRows ?? 0} kunci deduplikasi`, color: ANSI.magenta },
+            { label: 'DOKUMEN STATE', value: `${summary.documentRows ?? 0} dokumen`, color: ANSI.green }
         ];
         if ((summary.updatedRows ?? 0) > 0 || (summary.deletedRows ?? 0) > 0) {
-            rows.push({ label: 'REPAIR', value: `U:${summary.updatedRows ?? 0} D:${summary.deletedRows ?? 0}`, color: ANSI.yellow });
+            rows.push({ label: 'PERBAIKAN', value: `updated=${summary.updatedRows ?? 0}, deleted=${summary.deletedRows ?? 0}`, color: ANSI.yellow });
         }
         if (summary.lastResetAt) {
-            rows.push({ label: 'RESET', value: summary.lastResetAt, color: ANSI.gray });
+            rows.push({ label: 'RESET TERAKHIR', value: summary.lastResetAt, color: ANSI.gray });
         }
         if (summary.reason) {
-            rows.push({ label: 'ALASAN', value: summary.reason, color: ANSI.gray });
+            rows.push({ label: 'ALASAN RESET', value: summary.reason, color: ANSI.gray });
         }
-        rows.push({ label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow });
+        rows.push({ label: 'DICEK PADA', value: formatDisplayDateTime(), color: ANSI.yellow });
         renderLabeledConsoleBox('DATABASE CHECK', ANSI.blue, rows);
     }
 
