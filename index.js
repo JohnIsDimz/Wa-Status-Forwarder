@@ -62,6 +62,10 @@ function isValidPairingPhoneNumber(value) {
 
 const TELEGRAM_BOT_TOKEN = config.telegram?.botToken || '';
 const TELEGRAM_CHAT_ID = config.telegram?.chatId || '';
+const TELEGRAM_API_MODE = String(config.telegram?.apiMode || 'local').trim().toLowerCase();
+const TELEGRAM_LOCAL_API_BASE_URL = String(config.telegram?.localApiBaseUrl || 'http://127.0.0.1:8081').trim().replace(/\/+$/, '');
+const TELEGRAM_CLOUD_API_BASE_URL = String(config.telegram?.cloudApiBaseUrl || 'https://api.telegram.org').trim().replace(/\/+$/, '');
+const TELEGRAM_API_BASE_URL = TELEGRAM_API_MODE === 'cloud' ? TELEGRAM_CLOUD_API_BASE_URL : TELEGRAM_LOCAL_API_BASE_URL;
 const TELEGRAM_REQUEST_TIMEOUT_MS = Math.max(5000, Number(config.telegram?.requestTimeoutMs || 45000));
 const TELEGRAM_MAX_RETRIES = Math.max(0, Number(config.telegram?.maxRetries || 2));
 const TELEGRAM_FOOTER_TEXT = String(config.telegram?.footerText || '© By John');
@@ -2269,6 +2273,8 @@ function validateConfig() {
     if (!isValidPairingPhoneNumber(PAIRING_PHONE_NUMBER)) {
         throw new Error('Format whatsapp.phoneNumber tidak valid. Gunakan nomor internasional 10-15 digit, contoh: 628123456789');
     }
+    if (!['local', 'cloud'].includes(TELEGRAM_API_MODE)) throw new Error('telegram.apiMode harus berupa local atau cloud');
+    if (!TELEGRAM_API_BASE_URL || !/^https?:\/\//i.test(TELEGRAM_API_BASE_URL)) throw new Error('Endpoint Telegram harus diawali http:// atau https://');
     if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN === 'ISI_BOT_TOKEN_TELEGRAM') throw new Error('Bot token Telegram belum diisi di config.js pada telegram.botToken');
     if (!TELEGRAM_CHAT_ID || TELEGRAM_CHAT_ID === 'ISI_CHAT_ID_TELEGRAM') throw new Error('Chat ID Telegram belum diisi di config.js pada telegram.chatId');
     if (MAX_QUEUE_SIZE < MAX_URGENT_QUEUE_SIZE) throw new Error('Config queue tidak valid: maxQueueSize harus >= maxUrgentQueueSize');
@@ -2282,7 +2288,7 @@ function showStartupBanner() {
 
     startupBannerShown = true;
     console.log(paint(STARTUP_ASCII, ANSI.cyan));
-    logBoot(`WA ${PAIRING_PHONE_NUMBER} | TG ${TELEGRAM_CHAT_ID}`);
+    logBoot(`WA ${PAIRING_PHONE_NUMBER} | TG ${TELEGRAM_CHAT_ID} | API ${TELEGRAM_API_MODE.toUpperCase()}`);
 }
 
 function stopPairingReminder() {
@@ -3272,7 +3278,7 @@ async function fetchTelegram(endpoint, options) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TELEGRAM_REQUEST_TIMEOUT_MS);
     try {
-        return await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${endpoint}`, { ...options, signal: controller.signal });
+        return await fetch(`${TELEGRAM_API_BASE_URL}/bot${TELEGRAM_BOT_TOKEN}/${endpoint}`, { ...options, signal: controller.signal });
     } finally {
         clearTimeout(timeout);
     }
