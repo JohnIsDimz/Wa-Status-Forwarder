@@ -157,6 +157,11 @@ function createConsoleHelpers(options = {}) {
             || normalized.startsWith('jadwal harian 12 malam wib ');
     }
 
+    function isDatabaseCheckIntervalReason(reason = '') {
+        const normalized = String(reason || '').trim().toLowerCase().replace(/[_-]+/g, ' ');
+        return normalized === 'interval 30 menit' || normalized === 'interval 30m';
+    }
+
     function logDatabaseCheck(summary = {}) {
         const quickCheck = String(summary.quickCheck || 'ok').toLowerCase();
         const rows = [
@@ -173,7 +178,7 @@ function createConsoleHelpers(options = {}) {
         if (summary.lastResetAt) {
             rows.push({ label: 'RESET TERAKHIR', value: summary.lastResetAt, color: ANSI.gray });
         }
-        if (summary.reason && !isDailyResetReason(summary.reason)) {
+        if (summary.reason && !isDailyResetReason(summary.reason) && !isDatabaseCheckIntervalReason(summary.reason)) {
             rows.push({ label: 'ALASAN RESET', value: summary.reason, color: ANSI.gray });
         }
         rows.push({ label: 'DICEK PADA', value: formatDisplayDateTime(), color: ANSI.yellow });
