@@ -3292,14 +3292,75 @@ function isOwnStatusLikeMessage(msg) {
     return false;
 }
 
+function attachTelegramDiagnostics(error, diagnostics = {}) {
+    const target = error instanceof Error ? error : new Error(String(error || 'telegram_request_failed'));
+    target.telegramDiagnostics = {
+        ...(target.telegramDiagnostics || {}),
+        ...diagnostics
+    };
+    return target;
+}
+
+async function parseTelegramResponse(response) {
+    const rawBody = await response.text().catch(() => '');
+    let payload = {};
+    try {
+        payload = rawBody ? JSON.parse(rawBody) : {};
+    } catch {
+        payload = {};
+    }
+
+    if (!response.ok || payload.ok !== true) {
+        const description = normalizeDetailText(payload.description || `Telegram API error ${response.status}`, 180);
+        throw attachTelegramDiagnostics(new Error(description), {
+            failureType: 'api_error',
+            httpStatus: response.status,
+            apiErrorCode: payload.error_code || '',
+            description
+        });
+    }
+
+    return payload;
+}
+
 async function fetchTelegram(endpoint, options) {
     const controller = new AbortController();
+    const startedAt = Date.now();
     const timeout = setTimeout(() => controller.abort(), TELEGRAM_REQUEST_TIMEOUT_MS);
     try {
         return await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${endpoint}`, { ...options, signal: controller.signal });
+    } catch (error) {
+        const isTimeout = error?.name === 'AbortError';
+        throw attachTelegramDiagnostics(error, {
+            failureType: isTimeout ? 'timeout' : 'network_error',
+            causeCode: error?.cause?.code || error?.code || '',
+            elapsedMs: Date.now() - startedAt,
+            description: normalizeDetailText(error?.cause?.message || error?.message || 'fetch failed', 180)
+        });
     } finally {
         clearTimeout(timeout);
     }
+}
+
+function formatBytesForAlert(bytes) {
+    const size = Number(bytes || 0);
+    if (!Number.isFinite(size) || size <= 0) return 'tidak diketahui';
+    if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+    if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${size} B`;
+}
+
+function formatTelegramFailureDetail({ error, mediaType = '', method = '', sizeBytes = 0, attempts = 1 }) {
+    const diagnostics = error?.telegramDiagnostics || {};
+    const failureType = diagnostics.failureType || 'unknown_error';
+    const causeCode = diagnostics.causeCode ? `/${diagnostics.causeCode}` : '';
+    const httpStatus = diagnostics.httpStatus ? ` HTTP ${diagnostics.httpStatus}` : '';
+    const detail = normalizeDetailText(
+        diagnostics.description || error?.message || 'telegram_request_failed',
+        180
+    );
+    const prefix = mediaType ? `${mediaType} | ukuran=${formatBytesForAlert(sizeBytes)}` : 'pesan teks';
+    return `${prefix} | method=${method || 'sendMessage'} | percobaan=${attempts} | alasan=${failureType}${causeCode}${httpStatus} | detail=${detail}`;
 }
 
 async function withRetries(task, retries, options = {}) {
@@ -3329,22 +3390,27 @@ async function withRetries(task, retries, options = {}) {
 }
 
 async function sendTelegramText(text) {
+    let lastAttempt = 0;
     try {
-        const result = await withRetries(async () => {
+        const result = await withRetries(async (attempt) => {
+            lastAttempt = attempt;
             const response = await fetchTelegram('sendMessage', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text: String(text || '').slice(0, TELEGRAM_TEXT_LIMIT) })
             });
-            const result = await response.json();
-            if (!response.ok || !result.ok) throw new Error(result.description || `Telegram API error ${response.status}`);
-            return result;
+            return parseTelegramResponse(response);
         }, TELEGRAM_MAX_RETRIES, { metricKey: 'telegramRetried', auditReason: 'telegram_retry_send_text' });
         incrementMetric('telegramSent', 1);
         updateHealth({ lastTelegramSuccessAt: new Date().toISOString() });
         return result;
     } catch (error) {
-        void sendOperationalAlert('telegram_gagal_kirim', error?.message || String(error), { sendTelegram: false, sendWhatsapp: true });
+        const detail = formatTelegramFailureDetail({
+            error,
+            method: 'sendMessage',
+            attempts: lastAttempt || (TELEGRAM_MAX_RETRIES + 1)
+        });
+        void sendOperationalAlert('telegram_gagal_kirim', detail, { sendTelegram: false, sendWhatsapp: true });
         throw error;
     }
 }
@@ -3360,30 +3426,43 @@ async function sendToTelegram(buffer, mediaInfo, participant, msg) {
     const fileName = mediaInfo.fileName || `status_${mediaInfo.type}_${Date.now()}.${ext}`;
     const caption = buildTelegramCaption(participant, mediaInfo, msg, TELEGRAM_MEDIA_CAPTION_LIMIT);
 
+    let lastAttempt = 0;
     try {
-        const result = await withRetries(async () => {
+        const result = await withRetries(async (attempt) => {
+            lastAttempt = attempt;
             const formData = new FormData();
             formData.append('chat_id', TELEGRAM_CHAT_ID);
             formData.append('caption', caption);
             formData.append(field, new Blob([buffer], { type: mediaInfo.mimetype || 'application/octet-stream' }), fileName);
             const response = await fetchTelegram(method, { method: 'POST', body: formData });
-            const result = await response.json();
-            if (!response.ok || !result.ok) throw new Error(result.description || `Telegram API error ${response.status}`);
-            return result;
+            return parseTelegramResponse(response);
         }, TELEGRAM_MAX_RETRIES, { metricKey: 'telegramRetried', auditReason: 'telegram_retry_send_media', meta: { method, mediaType: mediaInfo.type } });
 
         incrementMetric('telegramSent', 1);
         updateHealth({ lastTelegramSuccessAt: new Date().toISOString() });
         return result;
     } catch (error) {
+        const mediaSizeBytes = Buffer.isBuffer(buffer) ? buffer.length : 0;
+        const telegramError = attachTelegramDiagnostics(error, {
+            attempts: lastAttempt || (TELEGRAM_MAX_RETRIES + 1),
+            mediaType: String(mediaInfo.type || 'media').toLowerCase(),
+            method,
+            sizeBytes: mediaSizeBytes
+        });
         const isActualStatus = isActualStatusMessage(msg, mediaInfo.envelope || inspectStatusEnvelope(msg?.message));
         const isForwardedChannelMedia = mediaInfo.sourceType === 'newsletter';
         const isEligibleMediaAlert = mediaInfo.type !== 'text' && (isActualStatus || isForwardedChannelMedia);
         if (isEligibleMediaAlert) {
-            const mediaType = String(mediaInfo.type || 'media').toLowerCase();
-            void sendOperationalAlert('telegram_gagal_kirim_media', `${mediaType} | ${error?.message || String(error)}`, { sendTelegram: false, sendWhatsapp: true });
+            const detail = formatTelegramFailureDetail({
+                error: telegramError,
+                mediaType: telegramError.telegramDiagnostics.mediaType,
+                method,
+                sizeBytes: mediaSizeBytes,
+                attempts: telegramError.telegramDiagnostics.attempts
+            });
+            void sendOperationalAlert('telegram_gagal_kirim_media', detail, { sendTelegram: false, sendWhatsapp: true });
         }
-        throw error;
+        throw telegramError;
     }
 }
 
@@ -4421,6 +4500,7 @@ async function forwardStatusMedia(sock, msg) {
         return true;
     }
 
+    let lastMediaSizeBytes = getMediaSizeBytes(mediaInfo);
     try {
         const isChannelForwardedStatus = mediaInfo.sourceType === 'newsletter' && isActualStatusMessage(msg, mediaInfo.envelope);
         const isDirectForwardedChannelMedia = mediaInfo.sourceType === 'newsletter' && !isChannelForwardedStatus;
@@ -4447,6 +4527,7 @@ async function forwardStatusMedia(sock, msg) {
                 DOWNLOAD_RETRIES,
                 { metricKey: 'downloadRetried', auditReason: 'status_download_retry', meta: buildMessageMeta(msg, mediaInfo, identity) }
             );
+            lastMediaSizeBytes = Buffer.isBuffer(buffer) ? buffer.length : lastMediaSizeBytes;
 
             if (STRICT_BUFFER_HASH) {
                 const bufferFingerprint = buildBufferFingerprint(buffer, participant, mediaInfo, msg);
@@ -4487,8 +4568,22 @@ async function forwardStatusMedia(sock, msg) {
     } catch (error) {
         releaseFingerprints(statusPrimaryKey, activeFingerprints);
         trackDailyStatusFailure(identity, mediaInfo, msg, error);
-        recordFailedJob('forward_status', { ...buildMessageMeta(msg, mediaInfo, identity), statusPrimaryKey }, error?.message || String(error));
-        updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `forward_status:${error?.message || error}` });
+        const telegramFailureDetail = error?.telegramDiagnostics
+            ? formatTelegramFailureDetail({
+                error,
+                mediaType: mediaInfo.type === 'text' ? '' : mediaInfo.type,
+                method: error.telegramDiagnostics.method || (mediaInfo.type === 'text' ? 'sendMessage' : getTelegramSendMethod(mediaInfo.type).method),
+                sizeBytes: error.telegramDiagnostics.sizeBytes || lastMediaSizeBytes,
+                attempts: error.telegramDiagnostics.attempts || (TELEGRAM_MAX_RETRIES + 1)
+            })
+            : (error?.message || String(error));
+        recordFailedJob('forward_status', {
+            ...buildMessageMeta(msg, mediaInfo, identity),
+            statusPrimaryKey,
+            mediaSizeBytes: lastMediaSizeBytes,
+            telegramFailure: error?.telegramDiagnostics ? telegramFailureDetail : ''
+        }, telegramFailureDetail);
+        updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `forward_status:${telegramFailureDetail}` });
         throw error;
     }
 }

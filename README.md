@@ -97,7 +97,7 @@ Caption media dibatasi sesuai batas Telegram dan dinormalisasi agar spasi, baris
 
 ## Alert dan Signal Audit
 
-Alert operasional digunakan untuk masalah koneksi, sesi, database, panggilan, dan pengiriman Telegram. Alert kegagalan media berlaku untuk semua tipe media yang benar-benar masuk pipeline Status atau forwarded media yang diizinkan, dengan detail jenis media dan error yang diterima.
+Alert operasional digunakan untuk masalah koneksi, sesi, database, panggilan, dan pengiriman Telegram. Alert kegagalan media berlaku untuk semua tipe media yang benar-benar masuk pipeline Status atau forwarded media yang diizinkan, dengan detail jenis media dan error yang diterima. Jika tersedia, detail juga mencantumkan ukuran media, method Telegram, jumlah percobaan, kategori kegagalan (`timeout`, `network_error`, atau `api_error`), HTTP status, dan pesan API yang sudah dinormalisasi.
 
 Contoh blok console ringkas:
 
