@@ -256,9 +256,6 @@ module.exports = {
     telegram: {
         botToken: 'ISI_BOT_TOKEN_TELEGRAM',
         chatId: 'ISI_CHAT_ID_TELEGRAM',
-        apiMode: 'local',
-        localApiBaseUrl: 'http://127.0.0.1:8081',
-        cloudApiBaseUrl: 'https://api.telegram.org',
         requestTimeoutMs: 45000,
         maxRetries: 2,
         footerText: '© By John'

@@ -71,7 +71,7 @@ flowchart LR
     RX --> Q[In-memory queue]
     Q --> D[Dedupe & rate limit\nSQLite]
     D --> M[Media downloader]
-    M --> TG[Telegram Bot API\nLocal atau Cloud dari config.js]
+    M --> TG[Telegram Cloud Bot API]
 
     RX --> AUD[Audit, health, metrics\nJSON + SQLite]
     SES[Multi-file auth session] --> WA
@@ -125,49 +125,13 @@ whatsapp: {
 telegram: {
     botToken: '123456:token-telegram',
     chatId: '-100xxxxxxxxxx',
-    apiMode: 'local',
-    localApiBaseUrl: 'http://127.0.0.1:8081',
-    cloudApiBaseUrl: 'https://api.telegram.org',
     requestTimeoutMs: 45000,
     maxRetries: 2,
     footerText: '© By John'
 }
 ```
 
-Jangan memasukkan token Telegram, nomor pribadi, API hash Local Bot API, file sesi, atau database runtime ke Git. Bot ini membaca konfigurasi operasional langsung dari `config.js`, sehingga perubahan konfigurasi harus dilakukan di file tersebut lalu proses bot harus di-restart.
-
-### Mode Telegram API
-
-Mode default adalah `local`, sehingga aplikasi mengirim request ke Local Bot API Server pada `telegram.localApiBaseUrl`. Local Bot API Server harus berjalan sebagai service terpisah pada VPS; aplikasi Node.js ini tidak mengompilasi atau menjalankan binary Local Bot API Server secara otomatis. Jika server local berada dalam container Pterodactyl lain, jangan gunakan `127.0.0.1` kecuali kedua proses benar-benar berbagi network namespace. Gunakan hostname atau alamat internal yang dapat dijangkau dari container bot.
-
-Contoh setup non-Docker mengikuti repository resmi Telegram Bot API Server:
-
-```bash
-git clone --recursive https://github.com/tdlib/telegram-bot-api.git
-cd telegram-bot-api
-mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-cmake --build . --target install -j2
-```
-
-Jalankan service local dengan API ID dan API hash dari akun developer Telegram, direktori data persisten, serta port internal yang hanya dapat dijangkau aplikasi bot:
-
-```bash
-telegram-bot-api \\
-  --api-id API_ID_ANDA \\
-  --api-hash API_HASH_ANDA \\
-  --local \\
-  --http-port 8081 \\
-  --dir /opt/telegram-bot-api/data
-```
-
-Untuk rollback ke Cloud Bot API, ubah satu nilai berikut lalu restart runner:
-
-```js
-apiMode: 'cloud'
-```
-
-Ketika memakai Cloud, aplikasi menggunakan `telegram.cloudApiBaseUrl`. Ketika memakai Local, aplikasi menggunakan `telegram.localApiBaseUrl`; token bot dan `chatId` tetap sama. Pastikan service Local Bot API Server aktif lebih dahulu sebelum runner Node.js dimulai.
+Jangan memasukkan token Telegram, nomor pribadi, file sesi, atau database runtime ke Git. Bot ini membaca konfigurasi operasional langsung dari `config.js`, sehingga perubahan konfigurasi harus dilakukan di file tersebut lalu proses bot harus di-restart.
 
 Untuk mengganti emoji auto-like, cukup edit satu konstanta berikut di bagian paling atas `config.js`:
 
@@ -191,7 +155,7 @@ Konfigurasi yang paling sering disesuaikan adalah sebagai berikut.
 | Bagian | Fungsi |
 |---|---|
 | `whatsapp` | Nomor pairing dan direktori sesi |
-| `telegram` | Token bot, chat tujuan, mode Local/Cloud, endpoint, timeout, retry, dan footer caption |
+| `telegram` | Token bot, chat tujuan, timeout, retry, dan footer caption |
 | `connection` | Reconnect, keep-online, sinkronisasi history, privacy, dan anti-call |
 | `statusForwarder` | Jenis media, queue, persistent backlog, deduplikasi, batas ukuran, delay, rate limit, auto-like, verifikasi reaction, dan forwarded channel media |
 | `operations` | Lokasi audit, metrics, health state, backup sesi, serta interval pemeriksaan |
@@ -461,7 +425,7 @@ WhatsApp Cloud API resmi perlu diperlakukan sebagai integrasi berbeda, bukan pen
 | Pairing berulang | Pastikan folder `auth_info_baileys/` persisten dan writable oleh user service |
 | Caption media terpotong | Batas media Telegram adalah 1024 karakter; detail panjang sebaiknya dikirim sebagai pesan teks lanjutan |
 | SQLite gagal dibuka | Pastikan native dependency terpasang pada Node.js target dan folder database writable |
-| Telegram gagal mengirim | Periksa mode API, endpoint Local, status service `telegram-bot-api`, token, chat ID, permission bot, timeout, dan response description dari Bot API |
+| Telegram gagal mengirim | Periksa token, chat ID, permission bot, timeout, koneksi, dan response description dari Cloud Bot API |
 | Status terduplikasi | Periksa `status-antispam.db`, content signature, message ID, dan queue retry |
 | Server kehabisan memory | Turunkan history sync, batasi queue/media size, dan pertimbangkan Redis queue atau worker terpisah |
 
@@ -506,7 +470,3 @@ Versi dependency dikunci di `package-lock.json`. Jalankan `npm outdated` dan `np
 [8]: https://baileys.wiki/concepts/data-store "Baileys Data Store"
 
 [9]: https://github.com/WhiskeySockets/Baileys/blob/master/README.md "Baileys README — Reaction Message"
-
-[10]: https://github.com/tdlib/telegram-bot-api "Telegram Bot API Server — Repository resmi"
-
-[11]: https://tdlib.github.io/telegram-bot-api/build.html "Telegram Bot API Server — Build Instructions"
