@@ -1,6 +1,6 @@
-# Bot-Tele
+# Wa Status Forwarder
 
-Bot-Tele adalah layanan Node.js yang memantau status WhatsApp melalui koneksi Baileys, mengambil media status, kemudian meneruskannya secara otomatis ke Telegram. Bot dirancang untuk berjalan sebagai proses background di server, tanpa membutuhkan aplikasi desktop Telegram, WhatsApp Desktop, browser automation, atau sesi browser yang tetap terbuka.
+Wa Status Forwarder adalah layanan Node.js yang memantau status WhatsApp melalui koneksi Baileys, mengambil media status, kemudian meneruskannya secara otomatis ke Telegram. Bot dirancang untuk berjalan sebagai proses background di server, tanpa membutuhkan aplikasi desktop Telegram, WhatsApp Desktop, browser automation, atau sesi browser yang tetap terbuka.
 
 > **Catatan penting:** Baileys tetap bertindak sebagai client protokol WhatsApp Web di level kode. Yang dihilangkan adalah ketergantungan pada client GUI atau browser, bukan kebutuhan untuk menautkan satu akun WhatsApp sebagai perangkat tertaut.
 
@@ -337,7 +337,7 @@ Contoh unit `systemd` minimal:
 
 ```ini
 [Unit]
-Description=Bot-Tele WhatsApp to Telegram
+Description=Wa Status Forwarder WhatsApp to Telegram
 After=network-online.target
 Wants=network-online.target
 
