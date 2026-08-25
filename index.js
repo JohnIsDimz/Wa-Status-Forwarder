@@ -810,20 +810,33 @@ function antiSpamHasFingerprint(fingerprint) {
     }
 }
 
-async function analyzeAiAntiSpam(fingerprints = []) {
-    const uniqueFingerprints = [...new Set((Array.isArray(fingerprints) ? fingerprints : []).filter(Boolean))];
+function analyzeAiAntiSpam(fingerprints = []) {
+    const uniqueFingerprints = [...new Set((Array.isArray(fingerprints) ? fingerprints : [])
+        .map((fingerprint) => String(fingerprint || '').trim())
+        .filter(Boolean))];
+    const matches = [];
     for (const fingerprint of uniqueFingerprints) {
         if (processingStatusKeys.has(fingerprint) || processingFingerprints.has(fingerprint)) {
-            return { exists: true, source: 'processing', fingerprint };
+            matches.push({ fingerprint, source: 'processing' });
+            continue;
         }
         if (processedStatusCache.has(fingerprint)) {
-            return { exists: true, source: 'cache', fingerprint };
+            matches.push({ fingerprint, source: 'cache' });
+            continue;
         }
         if (antiSpamHasFingerprint(fingerprint)) {
-            return { exists: true, source: 'sqlite', fingerprint };
+            matches.push({ fingerprint, source: 'sqlite' });
         }
     }
-    return { exists: false, source: 'none', fingerprint: '' };
+    const firstMatch = matches[0] || null;
+    return {
+        exists: Boolean(firstMatch),
+        source: firstMatch?.source || 'none',
+        fingerprint: firstMatch?.fingerprint || '',
+        checkedCount: uniqueFingerprints.length,
+        matchedCount: matches.length,
+        matches
+    };
 }
 
 function buildStatusRecordProbe(msg, participant, mediaInfo, identity = null) {
@@ -2956,26 +2969,37 @@ function buildBufferFingerprint(buffer, participant, mediaInfo, msg = null) {
     return `buffer:${ownerToken}:${mediaInfo.type}:${digest}`;
 }
 
-async function isProcessedFingerprint(fingerprint) {
+function isProcessedFingerprint(fingerprint) {
     if (!fingerprint) return false;
-    return (await analyzeAiAntiSpam([fingerprint])).exists;
+    return analyzeAiAntiSpam([fingerprint]).exists;
 }
 
-async function reserveFingerprints(statusPrimaryKey, fingerprints, probe = null) {
+function reserveFingerprints(statusPrimaryKey, fingerprints, probe = null) {
     const keysToCheck = [statusPrimaryKey, ...(Array.isArray(fingerprints) ? fingerprints : [])].filter(Boolean);
-    const analysis = await analyzeAiAntiSpam(keysToCheck);
+    const analysis = analyzeAiAntiSpam(keysToCheck);
     if (analysis.exists) {
-        return false;
+        return { reserved: false, reason: 'fingerprint_match', analysis };
     }
 
     const existingRecord = findExistingStatusRecord(statusPrimaryKey, probe || {});
     if (existingRecord) {
-        return false;
+        return {
+            reserved: false,
+            reason: 'record_match',
+            analysis: {
+                exists: true,
+                source: 'sqlite_record',
+                fingerprint: existingRecord.status_primary_key || statusPrimaryKey || '',
+                checkedCount: keysToCheck.length,
+                matchedCount: 1,
+                matches: []
+            }
+        };
     }
 
     if (statusPrimaryKey) processingStatusKeys.add(statusPrimaryKey);
     fingerprints.forEach((fingerprint) => processingFingerprints.add(fingerprint));
-    return true;
+    return { reserved: true, reason: 'new', analysis };
 }
 
 function releaseFingerprints(statusPrimaryKey, fingerprints) {
@@ -3352,7 +3376,11 @@ async function sendToTelegram(buffer, mediaInfo, participant, msg) {
         updateHealth({ lastTelegramSuccessAt: new Date().toISOString() });
         return result;
     } catch (error) {
-        void sendOperationalAlert('telegram_gagal_kirim_media', `${mediaInfo.type || 'media'} | ${error?.message || String(error)}`, { sendTelegram: false, sendWhatsapp: true });
+        const isActualVideoStatus = mediaInfo.type === 'video'
+            && isActualStatusMessage(msg, mediaInfo.envelope || inspectStatusEnvelope(msg?.message));
+        if (isActualVideoStatus) {
+            void sendOperationalAlert('telegram_gagal_kirim_media', `video | ${error?.message || String(error)}`, { sendTelegram: false, sendWhatsapp: true });
+        }
         throw error;
     }
 }
@@ -4371,10 +4399,20 @@ async function forwardStatusMedia(sock, msg) {
     const statusPrimaryKey = buildStatusPrimaryKey(msg, participant, mediaInfo);
     const activeFingerprints = buildStatusFingerprints(msg, participant, mediaInfo);
     const statusProbe = buildStatusRecordProbe(msg, participant, mediaInfo, identity);
-    if (!(await reserveFingerprints(statusPrimaryKey, activeFingerprints, statusProbe))) {
+    const reservation = await reserveFingerprints(statusPrimaryKey, activeFingerprints, statusProbe);
+    if (!reservation.reserved) {
         incrementMetric('statusSkipped', 1);
         incrementMetric('statusDuplicateSkipped', 1);
-        recordAudit('status_skip_duplicate_precheck', { ...buildMessageMeta(msg, mediaInfo, identity), statusPrimaryKey }, 'info');
+        recordAudit('status_skip_duplicate_precheck', {
+            ...buildMessageMeta(msg, mediaInfo, identity),
+            statusPrimaryKey,
+            antiSpam: {
+                reason: reservation.reason,
+                source: reservation.analysis?.source || 'unknown',
+                checkedCount: reservation.analysis?.checkedCount || 0,
+                matchedCount: reservation.analysis?.matchedCount || 0
+            }
+        }, 'info');
         if (!ULTRA_MINIMAL_CONSOLE) {
             logDuplicateSkip(identity, mediaInfo, 'precheck duplicate', statusPrimaryKey);
         }

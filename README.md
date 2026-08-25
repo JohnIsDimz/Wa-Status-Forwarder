@@ -40,11 +40,13 @@ Perubahan penguatan yang sudah diterapkan adalah sebagai berikut.
 | Fallback catch-up | Jika event penanda tidak datang, bot otomatis membuka pipeline setelah timeout terkonfigurasi |
 | `getMessage` | Snapshot pesan disediakan ke Baileys untuk retry dekripsi dan pemulihan pesan |
 | `messages.update` | Membangun kembali status dari snapshot ketika update tidak membawa payload message lengkap |
+| AI anti-spam analyzer | Analyzer lokal memeriksa fingerprint unik melalui proses aktif, cache, SQLite, dan record Status; hasil duplicate menyimpan sumber serta jumlah match di audit |
 | Reconnect queue | Job berisi payload pesan dipertahankan sementara dan di-enqueue kembali ke socket baru |
 | Persistent backlog | Job status juga ditulis ke tabel `pending_status_backlog` SQLite dan dimuat kembali setelah restart atau reconnect |
 | History filter | Status history yang lebih tua dari `historyStatusMaxAgeHours` tidak diteruskan |
 | Deduplikasi | Message ID, remote JID, participant, content signature, SQLite, dan queue key dipakai bersama |
 | Auto-like verification | Reaction memakai key lengkap PN/LID dan log sukses hanya dibuat setelah echo reaction terkonfirmasi; jika timeout, status dicatat sebagai unconfirmed |
+| Alert media Telegram | Alert operasional `TELEGRAM MEDIA GAGAL KIRIM` dibatasi pada video yang benar-benar merupakan Status; kegagalan pengiriman media lain tetap dicatat sebagai failed job tanpa alert tersebut |
 
 Baileys bersifat stateless dan tidak menyimpan message store permanen, sehingga aplikasi memang perlu menyediakan store sendiri untuk retry, history, dan state kontak. [8] Implementasi saat ini memakai cache bounded di memory untuk snapshot cepat dan SQLite untuk deduplikasi. Untuk volume besar atau multi-worker, queue persisten Redis/BullMQ tetap menjadi tahap lanjutan, bukan dependency wajib saat ini.
 
