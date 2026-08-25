@@ -64,7 +64,7 @@ const TELEGRAM_BOT_TOKEN = config.telegram?.botToken || '';
 const TELEGRAM_CHAT_ID = config.telegram?.chatId || '';
 const TELEGRAM_REQUEST_TIMEOUT_MS = Math.max(5000, Number(config.telegram?.requestTimeoutMs || 45000));
 const TELEGRAM_MAX_RETRIES = Math.max(0, Number(config.telegram?.maxRetries || 2));
-const TELEGRAM_FOOTER_TEXT = String(config.telegram?.footerText || '© By John');
+const TELEGRAM_FOOTER_TEXT = String(config.telegram?.footerText || '© joo.exe');
 const TELEGRAM_MEDIA_CAPTION_LIMIT = 1024;
 const TELEGRAM_TEXT_LIMIT = 4096;
 
@@ -357,7 +357,7 @@ function initAntiSpamStorage() {
                 type TEXT,
                 message_id TEXT,
                 display_name TEXT,
-                owner_mark TEXT DEFAULT '© By John'
+                owner_mark TEXT DEFAULT '© joo.exe'
             );
             CREATE INDEX IF NOT EXISTS idx_processed_status_fingerprints_processed_at
             ON processed_status_fingerprints (processed_at);
@@ -374,7 +374,7 @@ function initAntiSpamStorage() {
                 message_id TEXT,
                 content_signature TEXT,
                 display_name TEXT,
-                owner_mark TEXT DEFAULT '© By John'
+                owner_mark TEXT DEFAULT '© joo.exe'
             );
             CREATE INDEX IF NOT EXISTS idx_processed_status_records_processed_at
             ON processed_status_records (processed_at);
@@ -397,7 +397,7 @@ function initAntiSpamStorage() {
                 updated_at INTEGER NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
-                owner_mark TEXT DEFAULT '© By John'
+                owner_mark TEXT DEFAULT '© joo.exe'
             );
             CREATE INDEX IF NOT EXISTS idx_pending_status_backlog_created_at
             ON pending_status_backlog (created_at);
@@ -407,7 +407,7 @@ function initAntiSpamStorage() {
                 store_key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at INTEGER NOT NULL,
-                owner_mark TEXT DEFAULT '© By John'
+                owner_mark TEXT DEFAULT '© joo.exe'
             );
             CREATE INDEX IF NOT EXISTS idx_kv_store_updated_at
             ON kv_store (updated_at);
@@ -416,7 +416,7 @@ function initAntiSpamStorage() {
                 day_key TEXT PRIMARY KEY,
                 generated_at INTEGER NOT NULL,
                 summary_json TEXT NOT NULL,
-                owner_mark TEXT DEFAULT '© By John'
+                owner_mark TEXT DEFAULT '© joo.exe'
             );
             CREATE INDEX IF NOT EXISTS idx_daily_status_reports_generated_at
             ON daily_status_reports (generated_at);
@@ -578,7 +578,7 @@ function initAntiSpamStorage() {
                     message_id,
                     display_name,
                     owner_mark
-                ) VALUES (?, ?, ?, ?, ?, ?, '© By John')
+                ) VALUES (?, ?, ?, ?, ?, ?, '© joo.exe')
             `),
             upsertStatusRecord: antiSpamDb.prepare(`
                 INSERT OR REPLACE INTO processed_status_records (
@@ -594,7 +594,7 @@ function initAntiSpamStorage() {
                     content_signature,
                     display_name,
                     owner_mark
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '© By John')
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '© joo.exe')
             `),
             getStatusRecord: antiSpamDb.prepare(`
                 SELECT status_primary_key, processed_at, participant, remote_jid, chat_scope, source_type, status_category, media_type, message_id, content_signature, display_name
@@ -657,7 +657,7 @@ function initAntiSpamStorage() {
                     value,
                     updated_at,
                     owner_mark
-                ) VALUES (?, ?, ?, '© By John')
+                ) VALUES (?, ?, ?, '© joo.exe')
             `),
             upsertDailyStatusReport: antiSpamDb.prepare(`
                 INSERT OR REPLACE INTO daily_status_reports (
@@ -665,7 +665,7 @@ function initAntiSpamStorage() {
                     generated_at,
                     summary_json,
                     owner_mark
-                ) VALUES (?, ?, ?, '© By John')
+                ) VALUES (?, ?, ?, '© joo.exe')
             `),
             deleteOldDailyStatusReports: antiSpamDb.prepare('DELETE FROM daily_status_reports WHERE generated_at < ?'),
             countFingerprints: antiSpamDb.prepare('SELECT COUNT(*) AS total FROM processed_status_fingerprints'),
@@ -693,7 +693,7 @@ function initAntiSpamStorage() {
                     attempts,
                     last_error,
                     owner_mark
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '© By John')
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, '© joo.exe')
                 ON CONFLICT (remote_jid, message_id)
                     WHERE remote_jid IS NOT NULL AND remote_jid <> ''
                       AND message_id IS NOT NULL AND message_id <> ''

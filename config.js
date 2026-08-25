@@ -258,7 +258,7 @@ module.exports = {
         chatId: 'ISI_CHAT_ID_TELEGRAM',
         requestTimeoutMs: 45000,
         maxRetries: 2,
-        footerText: '© By John'
+        footerText: '© joo.exe'
     },
     operations: {
         healthStoreFile: 'healthcheck.json',

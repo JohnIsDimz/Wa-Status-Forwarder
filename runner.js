@@ -1,6 +1,6 @@
 /**
- * Owner Mark: © By John
- * Bot ini milik John.
+ * Owner Mark: © joo.exe
+ * Bot ini milik joo.exe.
  */
 
 const { spawn } = require('child_process');

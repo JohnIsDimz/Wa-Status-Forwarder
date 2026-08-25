@@ -129,7 +129,7 @@ telegram: {
     chatId: '-100xxxxxxxxxx',
     requestTimeoutMs: 45000,
     maxRetries: 2,
-    footerText: '© By John'
+    footerText: '© joo.exe'
 }
 ```
 
@@ -237,7 +237,7 @@ ISI STATUS
 Teks caption dari status WhatsApp ditampilkan di sini.
 
 ───────────
-© By John
+© joo.exe
 ```
 
 Perilaku formatter caption:
