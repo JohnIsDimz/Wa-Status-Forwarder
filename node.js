@@ -151,6 +151,12 @@ function createConsoleHelpers(options = {}) {
         logSystem('Menunggu koneksi WhatsApp', phoneNumber, 'MENUNGGU KONEKSI', ANSI.yellow);
     }
 
+    function isDailyResetReason(reason = '') {
+        const normalized = String(reason || '').trim().toLowerCase().replace(/[_-]+/g, ' ');
+        return normalized === 'jadwal harian 12 malam wib'
+            || normalized.startsWith('jadwal harian 12 malam wib ');
+    }
+
     function logDatabaseCheck(summary = {}) {
         const quickCheck = String(summary.quickCheck || 'ok').toLowerCase();
         const rows = [
@@ -167,7 +173,7 @@ function createConsoleHelpers(options = {}) {
         if (summary.lastResetAt) {
             rows.push({ label: 'RESET TERAKHIR', value: summary.lastResetAt, color: ANSI.gray });
         }
-        if (summary.reason) {
+        if (summary.reason && !isDailyResetReason(summary.reason)) {
             rows.push({ label: 'ALASAN RESET', value: summary.reason, color: ANSI.gray });
         }
         rows.push({ label: 'DICEK PADA', value: formatDisplayDateTime(), color: ANSI.yellow });
@@ -208,7 +214,7 @@ function createConsoleHelpers(options = {}) {
             { label: 'DOKUMEN STATE', value: `${summary.documentRowsCleared ?? 0} dokumen`, color: ANSI.green },
             { label: 'DURASI', value: summary.durationMs != null ? `${summary.durationMs} ms` : '-', color: ANSI.yellow }
         ];
-        if (summary.reason) {
+        if (summary.reason && !isDailyResetReason(summary.reason)) {
             rows.push({ label: 'ALASAN RESET', value: summary.reason, color: ANSI.gray });
         }
         rows.push({ label: 'SELESAI PADA', value: formatDisplayDateTime(), color: ANSI.yellow });
