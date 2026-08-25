@@ -4811,7 +4811,7 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 process.on('uncaughtException', (error) => {
     const message = error?.message || String(error);
-    logError('Kesalahan aplikasi tidak tertangani', message);
+    logError('Kesalahan Bot tidak tertangani', message);
     updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `uncaughtException:${message}` });
     recordFailedJob('uncaughtException', {}, message);
     void sendOperationalAlert('runtime_error', message, { sendTelegram: true, sendWhatsapp: true });
