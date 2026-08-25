@@ -269,7 +269,7 @@ module.exports = {
         sessionBackupDir: 'auth_backups',
         sessionBackupIntervalMinutes: 60,
         databaseResetHourWib: 0,
-        databaseIntegrityCheckMinutes: 10,
+        databaseIntegrityCheckMinutes: 30,
         signalAuditIntervalMinutes: 10,
         sqliteDocumentWriteDebounceMs: 750,
         dailySummaryRetentionDays: 30,

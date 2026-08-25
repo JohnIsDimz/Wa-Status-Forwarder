@@ -77,7 +77,7 @@ const RUNTIME_STATE_FILE = path.join(__dirname, OPERATIONS.runtimeStateFile || '
 const SESSION_BACKUP_DIR = path.join(__dirname, OPERATIONS.sessionBackupDir || 'auth_backups');
 const SESSION_BACKUP_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(OPERATIONS.sessionBackupIntervalMinutes || 60) * 60 * 1000);
 const DATABASE_RESET_HOUR_WIB = Number(OPERATIONS.databaseResetHourWib ?? 0);
-const DATABASE_INTEGRITY_CHECK_INTERVAL_MS = Math.max(60 * 1000, Number(OPERATIONS.databaseIntegrityCheckMinutes || 10) * 60 * 1000);
+const DATABASE_INTEGRITY_CHECK_INTERVAL_MS = Math.max(60 * 1000, Number(OPERATIONS.databaseIntegrityCheckMinutes || 30) * 60 * 1000);
 const SIGNAL_AUDIT_INTERVAL_MS = Math.max(60 * 1000, Number(OPERATIONS.signalAuditIntervalMinutes || 10) * 60 * 1000);
 const SQLITE_DOCUMENT_WRITE_DEBOUNCE_MS = Math.max(50, Number(OPERATIONS.sqliteDocumentWriteDebounceMs || 750));
 const DAILY_SUMMARY_RETENTION_DAYS = Math.max(1, Number(OPERATIONS.dailySummaryRetentionDays || 30));
@@ -1728,7 +1728,7 @@ function maybeRunScheduledDatabaseReset(reason = 'scheduled') {
     return true;
 }
 
-function runSqliteIntegrityCheck(reason = 'interval_10m') {
+function runSqliteIntegrityCheck(reason = 'interval_30m') {
     if (!hasAntiSpamSqlite()) {
         return;
     }
@@ -1902,7 +1902,7 @@ function startStorePruneLoop() {
     scheduleNextDailyDatabaseReset();
 
     storePruneInterval = setInterval(() => {
-        runSqliteIntegrityCheck('interval_10_menit');
+        runSqliteIntegrityCheck('interval_30_menit');
     }, DATABASE_INTEGRITY_CHECK_INTERVAL_MS);
 }
 
