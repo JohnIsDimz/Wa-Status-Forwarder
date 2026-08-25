@@ -23,7 +23,7 @@ const STARTUP_ASCII = String.raw`
 function createConsoleHelpers(options = {}) {
     const colorize = options.colorize !== false;
     const timeZone = options.timeZone || 'Asia/Jakarta';
-    const autoLikeEmoji = String(options.autoLikeEmoji || '❤️');
+    const autoLikeEmoji = String(options.autoLikeEmoji || '💚️');
     const showSendLogs = options.showSendLogs === true;
     const showLikeLogs = options.showLikeLogs === true;
     const showCallLogs = options.showCallLogs === true;
