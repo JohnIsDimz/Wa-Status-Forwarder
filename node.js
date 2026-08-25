@@ -94,7 +94,6 @@ function createConsoleHelpers(options = {}) {
 
     function logBoot(message) {
         renderLabeledConsoleBox('MEMULAI BOT', ANSI.cyan, [
-            { label: 'APLIKASI', value: 'MEMULAI', color: ANSI.cyan },
             { label: 'KETERANGAN', value: message, color: ANSI.green },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ]);
