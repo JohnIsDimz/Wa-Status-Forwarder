@@ -3,6 +3,7 @@ node_modules/
 # WhatsApp authentication and runtime state
 auth_info_baileys/
 auth_backups/
+operational_backups/
 *.session
 
 # Runtime databases and state

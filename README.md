@@ -152,12 +152,24 @@ State audit dan failed jobs dipelihara otomatis berdasarkan batas jumlah dan ret
 
 Ketika Bot kembali siap setelah reconnect, backlog SQLite dan task reconnect diringkas berdasarkan jumlah item ditemukan, dijadwalkan ulang, kadaluarsa, tidak valid, dan tersisa. Ringkasan tersebut dicatat ke health state, metrics, audit, dan console sehingga pemulihan dapat ditelusuri tanpa membuka `message_blob` secara manual.
 
+Setiap Status memiliki Correlation ID deterministik yang ikut muncul pada metadata audit, retry, log pengiriman, log reaction, queue, dan alert Telegram. Ringkasan statistik harian juga mencakup Status terdeteksi, diteruskan, diabaikan, duplikat, retry, like terverifikasi, dan gagal.
+
+Bot memeriksa ruang disk dan ukuran gabungan database utama beserta file WAL/SHM secara berkala. Peringatan hanya dikirim ketika threshold berubah agar tidak membanjiri console atau Telegram. Retry adaptif menggunakan klasifikasi error, exponential backoff, jitter terbatas, dan `Retry-After` dari Telegram jika tersedia.
+
+Mode diagnostik sementara dapat diaktifkan melalui `operations.diagnosticModeEnabled`; durasinya dibatasi oleh `diagnosticModeMinutes` dan berakhir otomatis. Backup operasional terjadwal menyimpan konfigurasi tersanitasi, health, metrics, runtime state, serta jumlah metadata agregat. Token, chat ID, nomor, participant, sesi, dan payload pesan tidak disimpan dalam backup tersebut.
+
 | Pengaturan | Fungsi |
 |---|---|
 | `healthCheckIntervalMinutes` | Interval ringkasan health operasional. |
 | `operationalCleanupIntervalMinutes` | Interval pembersihan state operasional dan file sementara. |
 | `operationalRetentionDays` | Retensi audit dan failed jobs. |
 | `temporaryFileRetentionMinutes` | Umur minimum file `.tmp` sebelum dibersihkan. |
+| `capacityCheckIntervalMinutes` | Interval pemeriksaan ruang disk dan ukuran database. |
+| `diskWarningFreePercent` / `diskCriticalFreePercent` | Threshold peringatan dan kondisi kritis ruang disk. |
+| `databaseWarningSizeMB` | Ambang ukuran database untuk peringatan. |
+| `adaptiveRetryEnabled` / `retryMaxJitterMs` | Pengaturan retry berbasis klasifikasi error dan jitter. |
+| `diagnosticModeEnabled` / `diagnosticModeMinutes` | Mode diagnostik bounded dengan expiry otomatis. |
+| `operationalBackupIntervalMinutes` / `maxOperationalBackups` | Interval dan jumlah backup operasional tersanitasi. |
 
 ## Konfigurasi utama
 

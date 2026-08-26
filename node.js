@@ -117,6 +117,7 @@ function createConsoleHelpers(options = {}) {
             { label: 'WHATSAPP', value: summary.whatsapp || '-', color: ANSI.cyan },
             { label: 'TELEGRAM', value: summary.telegram || '-', color: ANSI.blue },
             { label: 'DATABASE', value: summary.database || '-', color: ANSI.magenta },
+            { label: 'STORAGE', value: summary.storage || '-', color: ANSI.gray },
             { label: 'ANTREAN', value: summary.queue || '-', color: ANSI.yellow },
             { label: 'BACKLOG', value: summary.backlog || '-', color: ANSI.yellow }
         ];
@@ -131,6 +132,19 @@ function createConsoleHelpers(options = {}) {
         }
         rows.push({ label: 'DIPERIKSA PADA', value: formatDisplayDateTime(), color: ANSI.yellow });
         renderLabeledConsoleBox('HEALTH OPERASIONAL', status === 'WARNING' ? ANSI.yellow : ANSI.blue, rows);
+    }
+
+    function logCapacityWarning(summary = {}) {
+        const rows = [
+            { label: 'STATUS', value: summary.status || 'PERINGATAN', color: summary.status === 'KRITIS' ? ANSI.red : ANSI.yellow },
+            { label: 'RUANG TERSISA', value: summary.free || '-', color: ANSI.yellow },
+            { label: 'PENGGUNAAN DISK', value: summary.used || '-', color: ANSI.yellow },
+            { label: 'UKURAN DATABASE', value: summary.database || '-', color: ANSI.magenta },
+            { label: 'LOKASI', value: summary.location || '-', color: ANSI.gray },
+            { label: 'TINDAKAN', value: summary.action || 'Periksa storage server', color: ANSI.cyan },
+            { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
+        ];
+        renderLabeledConsoleBox('PERINGATAN KAPASITAS STORAGE', summary.status === 'KRITIS' ? ANSI.red : ANSI.yellow, rows);
     }
 
     function logBacklogRecovery(summary = {}) {
@@ -254,12 +268,17 @@ function createConsoleHelpers(options = {}) {
         const failedCount = Array.isArray(summary.failures) ? summary.failures.length : 0;
         const rows = [
             { label: 'HARI', value: summary.dayKey || '-', color: ANSI.cyan },
+            { label: 'TERDETEKSI', value: `${totals.detected || 0} Status`, color: ANSI.cyan },
             { label: 'GAMBAR', value: `${totals.image || 0} media`, color: ANSI.magenta },
             { label: 'VIDEO', value: `${totals.video || 0} media`, color: ANSI.red },
             { label: 'AUDIO', value: `${totals.audio || 0} media`, color: ANSI.yellow },
             { label: 'DOKUMEN', value: `${totals.document || 0} media`, color: ANSI.blue },
             { label: 'DITERUSKAN', value: `${totals.forwarded || 0} media`, color: ANSI.green },
-            { label: 'GAGAL', value: `${failedCount} media`, color: ANSI.red },
+            { label: 'DIABAIKAN', value: `${totals.skipped || 0} Status`, color: ANSI.gray },
+            { label: 'DUPLIKAT', value: `${totals.duplicate || 0} Status`, color: ANSI.yellow },
+            { label: 'RETRY', value: `${totals.retries || 0} percobaan`, color: ANSI.yellow },
+            { label: 'LIKE TERVERIFIKASI', value: `${totals.liked || 0} Status`, color: ANSI.green },
+            { label: 'GAGAL', value: `${totals.failed || failedCount} media`, color: ANSI.red },
             { label: 'PENGIRIM UTAMA', value: topUploader ? `${topUploader.displayName} (${topUploader.total} media)` : '-', color: ANSI.green },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ];
@@ -317,7 +336,7 @@ function createConsoleHelpers(options = {}) {
         }
     }
 
-    function logSend(mediaInfo, identity, statusCategory) {
+    function logSend(mediaInfo, identity, statusCategory, correlationId = '') {
         if (!showSendLogs) return;
         const borderColor = getMediaTypeColor(mediaInfo.type);
         const title = ` KIRIM ${String(mediaInfo.type || '').toUpperCase()} `;
@@ -327,12 +346,13 @@ function createConsoleHelpers(options = {}) {
             paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow),
             paint(padLine('JENIS MEDIA', String(mediaInfo.type || '').toUpperCase(), consoleContentWidth), getMediaTypeColor(mediaInfo.type)),
             paint(padLine('WAKTU KIRIM', formatSendTime(), consoleContentWidth), ANSI.yellow),
-            paint(padLine('KATEGORI', statusCategory, consoleContentWidth), ANSI.blue)
+            paint(padLine('KATEGORI', statusCategory, consoleContentWidth), ANSI.blue),
+            paint(padLine('CORRELATION ID', correlationId || '-', consoleContentWidth), ANSI.gray)
         ];
         renderConsoleBox(title, borderColor, lines);
     }
 
-    function logLike(identity, mediaInfo) {
+    function logLike(identity, mediaInfo, correlationId = '') {
         if (!showLikeLogs) return;
         const borderColor = getMediaTypeColor(mediaInfo.type);
         const title = ` REAKSI ${autoLikeEmoji} ${String(mediaInfo.type || '').toUpperCase()} `;
@@ -341,7 +361,8 @@ function createConsoleHelpers(options = {}) {
             paint(padLine('NOMOR KONTAK', identity.number, consoleContentWidth), ANSI.cyan),
             paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow),
             paint(padLine('JENIS MEDIA', String(mediaInfo.type || '').toUpperCase(), consoleContentWidth), getMediaTypeColor(mediaInfo.type)),
-            paint(padLine('WAKTU REAKSI', formatSendTime(), consoleContentWidth), ANSI.yellow)
+            paint(padLine('WAKTU REAKSI', formatSendTime(), consoleContentWidth), ANSI.yellow),
+            paint(padLine('CORRELATION ID', correlationId || '-', consoleContentWidth), ANSI.gray)
         ];
         renderConsoleBox(title, borderColor, lines);
     }
@@ -387,6 +408,7 @@ function createConsoleHelpers(options = {}) {
         logDatabaseCheck,
         logConfigValidation,
         logOperationalHealth,
+        logCapacityWarning,
         logBacklogRecovery,
         logSignalAudit,
         logDailySummary,

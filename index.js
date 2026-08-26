@@ -83,6 +83,17 @@ const HEALTH_CHECK_INTERVAL_MS = Math.max(60 * 1000, Number(OPERATIONS.healthChe
 const OPERATIONAL_CLEANUP_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(OPERATIONS.operationalCleanupIntervalMinutes || 60) * 60 * 1000);
 const OPERATIONAL_RETENTION_MS = Math.max(24 * 60 * 60 * 1000, Number(OPERATIONS.operationalRetentionDays || 14) * 24 * 60 * 60 * 1000);
 const TEMP_FILE_RETENTION_MS = Math.max(5 * 60 * 1000, Number(OPERATIONS.temporaryFileRetentionMinutes || 60) * 60 * 1000);
+const CAPACITY_CHECK_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(OPERATIONS.capacityCheckIntervalMinutes || 15) * 60 * 1000);
+const DISK_WARNING_FREE_PERCENT = Math.min(95, Math.max(1, Number(OPERATIONS.diskWarningFreePercent || 10)));
+const DISK_CRITICAL_FREE_PERCENT = Math.min(DISK_WARNING_FREE_PERCENT - 1, Math.max(1, Number(OPERATIONS.diskCriticalFreePercent || 5)));
+const DATABASE_WARNING_SIZE_BYTES = Math.max(16 * 1024 * 1024, Number(OPERATIONS.databaseWarningSizeMB || 512) * 1024 * 1024);
+const ADAPTIVE_RETRY_ENABLED = OPERATIONS.adaptiveRetryEnabled !== false;
+const RETRY_MAX_JITTER_MS = Math.max(0, Number(OPERATIONS.retryMaxJitterMs || 800));
+const DIAGNOSTIC_MODE_CONFIGURED = OPERATIONS.diagnosticModeEnabled === true;
+const DIAGNOSTIC_MODE_DURATION_MS = Math.max(5 * 60 * 1000, Number(OPERATIONS.diagnosticModeMinutes || 30) * 60 * 1000);
+const OPERATIONAL_BACKUP_INTERVAL_MS = Math.max(15 * 60 * 1000, Number(OPERATIONS.operationalBackupIntervalMinutes || 360) * 60 * 1000);
+const OPERATIONAL_BACKUP_DIR = path.join(__dirname, OPERATIONS.operationalBackupDir || 'operational_backups');
+const MAX_OPERATIONAL_BACKUPS = Math.max(1, Number(OPERATIONS.maxOperationalBackups || 5));
 const SQLITE_DOCUMENT_WRITE_DEBOUNCE_MS = Math.max(50, Number(OPERATIONS.sqliteDocumentWriteDebounceMs || 750));
 const DAILY_SUMMARY_RETENTION_DAYS = Math.max(1, Number(OPERATIONS.dailySummaryRetentionDays || 30));
 const DAILY_SUMMARY_MAX_FAILURES = Math.max(5, Number(OPERATIONS.dailySummaryMaxFailures || 50));
@@ -229,7 +240,11 @@ let databaseResetTimeout = null;
 let signalAuditInterval = null;
 let healthCheckInterval = null;
 let operationalCleanupInterval = null;
+let capacityCheckInterval = null;
+let operationalBackupInterval = null;
 let configurationValidationShown = false;
+let lastCapacityWarningFingerprint = '';
+let diagnosticModeInitialized = false;
 let queueActive = false;
 let lastPhoneNumber = null;
 let telegramConfigWarned = false;
@@ -300,6 +315,7 @@ const {
     logDatabaseCheck,
     logConfigValidation,
     logOperationalHealth,
+    logCapacityWarning,
     logBacklogRecovery,
     logSignalAudit,
     logDailySummary,
@@ -983,6 +999,10 @@ function createEmptyDailyStatusSummary(dayKey = getCurrentWibDayKey()) {
         totals: {
             detected: 0,
             forwarded: 0,
+            skipped: 0,
+            duplicate: 0,
+            retries: 0,
+            liked: 0,
             failed: 0,
             image: 0,
             video: 0,
@@ -1029,8 +1049,6 @@ function ensureDailySummaryForCurrentDay() {
 
 function trackDailyStatusSuccess(identity, mediaInfo) {
     const summary = ensureDailySummaryForCurrentDay();
-    summary.totals.detected += 1;
-    summary.totals.forwarded += 1;
     const mediaType = String(mediaInfo?.type || 'other').toLowerCase();
     if (Object.prototype.hasOwnProperty.call(summary.totals, mediaType)) summary.totals[mediaType] += 1;
     else summary.totals.other += 1;
@@ -1160,6 +1178,14 @@ function runDailyDatabaseReset(reason = 'scheduled', dayKeyOverride = '') {
         metricsStore.statusDetected = 0;
         metricsStore.statusForwarded = 0;
         metricsStore.statusLiked = 0;
+        metricsStore.backlogRecoveryRuns = 0;
+        metricsStore.backlogRecoveryFound = 0;
+        metricsStore.backlogRecoveryScheduled = 0;
+        metricsStore.backlogRecoveryExpired = 0;
+        metricsStore.backlogRecoveryInvalid = 0;
+        metricsStore.backlogRecoveryFailures = 0;
+        metricsStore.operationalPruneRuns = 0;
+        metricsStore.operationalTempFilesRemoved = 0;
         metricsStore.statusSkipped = 0;
         metricsStore.statusDuplicateSkipped = 0;
         metricsStore.statusFromMeSkipped = 0;
@@ -1339,6 +1365,8 @@ function isSelfJid(jid) {
 function isTransientError(error) {
     const text = String(error?.message || error || '').toLowerCase();
     if (!text) return false;
+    const httpStatus = Number(error?.telegramDiagnostics?.httpStatus || 0);
+    if (httpStatus === 429 || httpStatus >= 500) return true;
     return [
         'timed out',
         'timeout',
@@ -1346,8 +1374,15 @@ function isTransientError(error) {
         'socket hang up',
         'econnreset',
         'etimedout',
+        'eai_again',
         'fetch failed',
         'aborted',
+        'rate limit',
+        'too many requests',
+        'temporarily unavailable',
+        'service unavailable',
+        'database is locked',
+        'database is busy',
         '429',
         '500',
         '502',
@@ -1359,6 +1394,15 @@ function isTransientError(error) {
         'media download failed',
         'not-authorized'
     ].some((snippet) => text.includes(snippet));
+}
+
+function getAdaptiveRetryDelayMs(error, attempt) {
+    const retryAfterMs = Number(error?.telegramDiagnostics?.retryAfterMs || 0);
+    if (retryAfterMs > 0) return Math.min(RETRY_MAX_DELAY_MS, retryAfterMs);
+    const exponent = Math.max(0, Number(attempt || 1) - 1);
+    const baseDelay = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * (2 ** exponent));
+    const jitter = RETRY_MAX_JITTER_MS > 0 ? Math.floor(Math.random() * (RETRY_MAX_JITTER_MS + 1)) : 0;
+    return Math.min(RETRY_MAX_DELAY_MS, baseDelay + jitter);
 }
 
 function randomBetween(min, max) {
@@ -1490,6 +1534,7 @@ const runtimeState = readJsonFile(RUNTIME_STATE_FILE, {
     pauseForward: false,
     pauseLike: false,
     pauseAntiCall: false,
+    diagnosticUntil: null,
     lastCommand: '',
     updatedAt: null
 });
@@ -1650,6 +1695,9 @@ function emitOperationalHealth(reason = 'interval') {
             whatsapp: whatsappStatus,
             telegram: telegramStatus,
             database: databaseStatus,
+            storage: healthStore.operational.capacity
+                ? `${Number(healthStore.operational.capacity.freePercent || 0).toFixed(1)}% bebas | DB ${formatBytesForAlert(healthStore.operational.capacity.databaseBytes || 0)}`
+                : 'belum diperiksa',
             queue: `${queueTotal} item (${urgentStatusQueue.length} prioritas, ${normalStatusQueue.length} normal)`,
             backlog: `${pendingBacklog} item tersimpan`,
             lastStatusAt: formatLastSignalAt(healthStore.lastStatusReceivedAt) || 'belum ada',
@@ -1743,6 +1791,85 @@ function stopOperationalCleanupLoop() {
     }
 }
 
+function getOperationalDatabaseSizeBytes() {
+    return [STATUS_DATABASE_FILE, `${STATUS_DATABASE_FILE}-wal`, `${STATUS_DATABASE_FILE}-shm`].reduce((total, filePath) => {
+        try {
+            return total + (fs.existsSync(filePath) ? Number(fs.statSync(filePath).size || 0) : 0);
+        } catch {
+            return total;
+        }
+    }, 0);
+}
+
+function runCapacityCheck(reason = 'interval') {
+    try {
+        if (typeof fs.statfsSync !== 'function') return null;
+        const stats = fs.statfsSync(__dirname);
+        const totalBytes = Number(stats.blocks || 0) * Number(stats.bsize || 0);
+        const freeBytes = Number(stats.bavail || stats.bfree || 0) * Number(stats.bsize || 0);
+        const freePercent = totalBytes > 0 ? (freeBytes / totalBytes) * 100 : 100;
+        const usedPercent = Math.max(0, 100 - freePercent);
+        const databaseBytes = getOperationalDatabaseSizeBytes();
+        const status = freePercent <= DISK_CRITICAL_FREE_PERCENT ? 'KRITIS'
+            : (freePercent <= DISK_WARNING_FREE_PERCENT || databaseBytes >= DATABASE_WARNING_SIZE_BYTES ? 'PERINGATAN' : 'SEHAT');
+        const capacity = {
+            status,
+            freeBytes,
+            freePercent: Number(freePercent.toFixed(2)),
+            usedPercent: Number(usedPercent.toFixed(2)),
+            databaseBytes,
+            checkedAt: new Date().toISOString(),
+            reason
+        };
+        ensureOperationalHealthState();
+        healthStore.operational.capacity = capacity;
+        updateHealth({ operational: healthStore.operational });
+
+        if (status !== 'SEHAT') {
+            const fingerprint = `${status}:${Math.floor(freePercent)}:${Math.floor(databaseBytes / (1024 * 1024))}`;
+            if (fingerprint !== lastCapacityWarningFingerprint) {
+                lastCapacityWarningFingerprint = fingerprint;
+                const detail = `ruang tersisa ${freePercent.toFixed(1)}% | database ${formatBytesForAlert(databaseBytes)}`;
+                recordAudit('operational_capacity_warning', { ...capacity, detail }, status === 'KRITIS' ? 'error' : 'warn');
+                logCapacityWarning({
+                    status,
+                    free: `${freePercent.toFixed(1)}% (${formatBytesForAlert(freeBytes)})`,
+                    used: `${usedPercent.toFixed(1)}%`,
+                    database: formatBytesForAlert(databaseBytes),
+                    location: __dirname,
+                    action: status === 'KRITIS' ? 'Segera tambah ruang disk dan hentikan pemrosesan berat' : 'Pantau ruang disk dan ukuran database'
+                });
+                void sendOperationalAlert('kapasitas_storage_warning', detail, { sendTelegram: true, sendWhatsapp: true });
+            }
+        } else {
+            lastCapacityWarningFingerprint = '';
+        }
+        return capacity;
+    } catch (error) {
+        recordFailedJob('capacity_check', { reason }, error?.message || String(error));
+        updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `capacity_check:${error?.message || error}` });
+        return null;
+    }
+}
+
+function startCapacityCheckLoop() {
+    if (capacityCheckInterval) {
+        clearInterval(capacityCheckInterval);
+        capacityCheckInterval = null;
+    }
+    runCapacityCheck('startup');
+    capacityCheckInterval = setInterval(() => {
+        runCapacityCheck('interval');
+    }, CAPACITY_CHECK_INTERVAL_MS);
+}
+
+function stopCapacityCheckLoop() {
+    if (capacityCheckInterval) {
+        clearInterval(capacityCheckInterval);
+        capacityCheckInterval = null;
+    }
+}
+
 function recordReconnectAttempt() {
     const today = new Date().toLocaleDateString('sv-SE', { timeZone: DISPLAY_TIME_ZONE });
     const nextCount = healthStore.reconnectDay === today
@@ -1816,6 +1943,87 @@ function createSessionBackup(reason = 'manual') {
     }
 }
 
+function sanitizeOperationalBackupValue(value, key = '') {
+    const sensitiveKey = /(token|secret|password|api[-_]?key|chatid|phone(number)?|allowednumbers|jid|participant|message(blob)?)/i.test(String(key));
+    if (sensitiveKey) return '[DISEMBUNYIKAN]';
+    if (Array.isArray(value)) return value.map((item) => sanitizeOperationalBackupValue(item, key));
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, sanitizeOperationalBackupValue(childValue, childKey)]));
+    }
+    return value;
+}
+
+function createOperationalBackup(reason = 'scheduled') {
+    try {
+        ensureDirectory(OPERATIONAL_BACKUP_DIR);
+        const createdAt = new Date().toISOString();
+        const timestamp = createdAt.replace(/[:.]/g, '-');
+        const backupPath = path.join(OPERATIONAL_BACKUP_DIR, `operational-${timestamp}.json`);
+        const latestPath = path.join(OPERATIONAL_BACKUP_DIR, 'latest.json');
+        const payload = {
+            metadata: {
+                createdAt,
+                reason,
+                nodeVersion: process.version,
+                platform: process.platform,
+                preset: config.activePreset || 'unknown',
+                databaseFile: path.basename(STATUS_DATABASE_FILE),
+                note: 'Backup konfigurasi tersanitasi dan metadata operasional; token, chat ID, nomor, dan sesi tidak disimpan.'
+            },
+            configuration: sanitizeOperationalBackupValue(config),
+            health: sanitizeOperationalBackupValue(healthStore),
+            metrics: sanitizeOperationalBackupValue(metricsStore),
+            runtime: sanitizeOperationalBackupValue(runtimeState),
+            metadataCounts: {
+                contacts: Object.keys(contactStore.contacts || {}).length,
+                pendingStatusReferences: Object.keys(statusReferenceStore.pendingRefs || {}).length,
+                resolvedStatusReferences: Object.keys(statusReferenceStore.resolvedRefs || {}).length,
+                blockedCallers: Object.keys(blockedCallStore.callers || {}).length,
+                pendingQueue: urgentStatusQueue.length + normalStatusQueue.length,
+                pendingBacklog: getPendingStatusBacklogCount()
+            }
+        };
+        const serialized = JSON.stringify(payload, null, 2);
+        const tempPath = `${backupPath}.tmp`;
+        fs.writeFileSync(tempPath, serialized, 'utf8');
+        fs.renameSync(tempPath, backupPath);
+        fs.writeFileSync(`${latestPath}.tmp`, serialized, 'utf8');
+        fs.renameSync(`${latestPath}.tmp`, latestPath);
+
+        const backups = fs.readdirSync(OPERATIONAL_BACKUP_DIR)
+            .filter((name) => name.startsWith('operational-') && name.endsWith('.json'))
+            .sort();
+        while (backups.length > MAX_OPERATIONAL_BACKUPS) {
+            const oldest = backups.shift();
+            if (oldest) fs.rmSync(path.join(OPERATIONAL_BACKUP_DIR, oldest), { force: true });
+        }
+        recordAudit('operational_backup_created', { reason, backupPath }, 'info');
+        return true;
+    } catch (error) {
+        recordFailedJob('operational_backup', { reason }, error?.message || String(error));
+        updateHealth({ lastErrorAt: new Date().toISOString(), lastErrorMessage: `operational_backup:${error?.message || error}` });
+        return false;
+    }
+}
+
+function startOperationalBackupLoop() {
+    if (operationalBackupInterval) {
+        clearInterval(operationalBackupInterval);
+        operationalBackupInterval = null;
+    }
+    createOperationalBackup('startup');
+    operationalBackupInterval = setInterval(() => {
+        createOperationalBackup('scheduled');
+    }, OPERATIONAL_BACKUP_INTERVAL_MS);
+}
+
+function stopOperationalBackupLoop() {
+    if (operationalBackupInterval) {
+        clearInterval(operationalBackupInterval);
+        operationalBackupInterval = null;
+    }
+}
+
 function restoreAuthFromBackupIfNeeded() {
     try {
         if (fs.existsSync(AUTH_FOLDER)) {
@@ -1855,9 +2063,30 @@ function stopSessionBackupLoop() {
     }
 }
 
+const DAILY_METRIC_FIELDS = {
+    statusDetected: 'detected',
+    statusForwarded: 'forwarded',
+    statusSkipped: 'skipped',
+    statusDuplicateSkipped: 'duplicate',
+    statusRetried: 'retries',
+    telegramRetried: 'retries',
+    downloadRetried: 'retries',
+    likeRetried: 'retries',
+    statusLiked: 'liked'
+};
+
+function updateDailyMetric(metricKey, amount) {
+    const field = DAILY_METRIC_FIELDS[metricKey];
+    if (!field) return;
+    const summary = ensureDailySummaryForCurrentDay();
+    summary.totals[field] = Number(summary.totals[field] || 0) + amount;
+    saveCurrentDailyStatusSummary(summary);
+}
+
 function incrementMetric(key, amount = 1) {
     metricsStore[key] = Number(metricsStore[key] || 0) + amount;
     saveMetricsStore();
+    updateDailyMetric(key, amount);
 }
 
 function recordAudit(reason, meta = {}, level = 'info') {
@@ -2462,6 +2691,13 @@ function validateConfig() {
     check(positiveNumber(OPERATIONS.operationalCleanupIntervalMinutes), 'operations.operationalCleanupIntervalMinutes harus lebih besar dari 0');
     check(positiveNumber(OPERATIONS.operationalRetentionDays), 'operations.operationalRetentionDays harus lebih besar dari 0');
     check(positiveNumber(OPERATIONS.temporaryFileRetentionMinutes), 'operations.temporaryFileRetentionMinutes harus lebih besar dari 0');
+    check(positiveNumber(OPERATIONS.capacityCheckIntervalMinutes), 'operations.capacityCheckIntervalMinutes harus lebih besar dari 0');
+    check(Number(OPERATIONS.diskCriticalFreePercent) < Number(OPERATIONS.diskWarningFreePercent), 'Config kapasitas tidak valid: diskCriticalFreePercent harus lebih kecil dari diskWarningFreePercent');
+    check(Number(OPERATIONS.databaseWarningSizeMB) > 0, 'operations.databaseWarningSizeMB harus lebih besar dari 0');
+    check(Number(OPERATIONS.retryMaxJitterMs) >= 0, 'operations.retryMaxJitterMs tidak boleh negatif');
+    check(positiveNumber(OPERATIONS.diagnosticModeMinutes), 'operations.diagnosticModeMinutes harus lebih besar dari 0');
+    check(positiveNumber(OPERATIONS.operationalBackupIntervalMinutes), 'operations.operationalBackupIntervalMinutes harus lebih besar dari 0');
+    check(positiveNumber(OPERATIONS.maxOperationalBackups), 'operations.maxOperationalBackups harus lebih besar dari 0');
     check(positiveNumber(OPERATIONS.sessionBackupIntervalMinutes), 'operations.sessionBackupIntervalMinutes harus lebih besar dari 0');
     check(positiveNumber(STATUS.maxMediaSizeMB), 'statusForwarder.maxMediaSizeMB harus lebih besar dari 0');
     check(nonNegativeNumber(STATUS.likeRetries), 'statusForwarder.likeRetries tidak boleh negatif');
@@ -2490,6 +2726,31 @@ function validateConfig() {
         throw new Error(`Konfigurasi tidak valid: ${errors.join(' | ')}`);
     }
     return { valid: true, checked, errors, warnings };
+}
+
+function isDiagnosticModeActive() {
+    if (DEBUG_STATUS_TYPE_DETECTION) return true;
+    const until = Number(runtimeState.diagnosticUntil || 0);
+    if (!until) return false;
+    if (until > Date.now()) return true;
+    runtimeState.diagnosticUntil = null;
+    saveRuntimeState();
+    return false;
+}
+
+function initializeDiagnosticMode() {
+    if (diagnosticModeInitialized) return;
+    diagnosticModeInitialized = true;
+    if (!DIAGNOSTIC_MODE_CONFIGURED) {
+        if (runtimeState.diagnosticUntil) {
+            runtimeState.diagnosticUntil = null;
+            saveRuntimeState();
+        }
+        return;
+    }
+    runtimeState.diagnosticUntil = Date.now() + DIAGNOSTIC_MODE_DURATION_MS;
+    saveRuntimeState();
+    logSystem('Mode diagnostik sementara aktif', `${Math.ceil(DIAGNOSTIC_MODE_DURATION_MS / 60000)} menit`, 'DIAGNOSTIK', ANSI.yellow);
 }
 
 function showStartupBanner() {
@@ -2886,7 +3147,7 @@ function getStatusSourceParticipant(msg, mediaInfo) {
 }
 
 function logStatusDetection(msg, mediaInfo) {
-    if (!DEBUG_STATUS_TYPE_DETECTION || !mediaInfo) return;
+    if (!isDiagnosticModeActive() || !mediaInfo) return;
     const wrapperTrail = mediaInfo.envelope?.wrappers?.length ? mediaInfo.envelope.wrappers.join(' > ') : 'direct';
     const innerType = mediaInfo.innerType || 'unknown';
     if (!MINIMAL_CONSOLE) {
@@ -2995,7 +3256,7 @@ async function simulateNaturalStatusView(sock, msg, mediaInfo, identity) {
     const waitMs = getNaturalViewDelayMs(mediaInfo, msg);
     const freshLabel = isFreshStatusMessage(msg) ? 'fresh' : 'normal';
     if (waitMs > 0) {
-        if (DEBUG_STATUS_TYPE_DETECTION && !MINIMAL_CONSOLE) {
+        if (isDiagnosticModeActive() && !MINIMAL_CONSOLE) {
             logDebug(
                 `read ${mediaInfo.type} ${identity.displayName}`,
                 `${Math.ceil(waitMs / 1000)} detik | ${freshLabel}`
@@ -3398,8 +3659,19 @@ function getQueueMessageKey(msg, mediaInfo = null) {
     return `${remote}|${ownerToken}|-`;
 }
 
-function buildMessageMeta(msg, mediaInfo = null, identity = null) {
+function getStatusCorrelationId(msg, mediaInfo = null, statusPrimaryKey = '') {
+    const seed = String(statusPrimaryKey || getQueueMessageKey(msg, mediaInfo) || [
+        msg?.key?.remoteJid || '',
+        msg?.key?.id || '',
+        msg?.key?.participant || msg?.participant || '',
+        mediaInfo?.type || ''
+    ].join('|'));
+    return `wsf-${crypto.createHash('sha256').update(seed).digest('hex').slice(0, 12)}`;
+}
+
+function buildMessageMeta(msg, mediaInfo = null, identity = null, statusPrimaryKey = '') {
     return {
+        correlationId: getStatusCorrelationId(msg, mediaInfo, statusPrimaryKey),
         messageId: msg?.key?.id || '',
         remoteJid: msg?.key?.remoteJid || '',
         participant: msg?.key?.participant || msg?.participant || '',
@@ -3515,13 +3787,15 @@ async function parseTelegramResponse(response) {
     }
 
     if (!response.ok || payload.ok !== true) {
-        const description = normalizeDetailText(payload.description || `Telegram API error ${response.status}`, 180);
-        throw attachTelegramDiagnostics(new Error(description), {
-            failureType: 'api_error',
-            httpStatus: response.status,
-            apiErrorCode: payload.error_code || '',
-            description
-        });
+            const description = normalizeDetailText(payload.description || `Telegram API error ${response.status}`, 180);
+            const retryAfterSeconds = Number(response.headers.get('retry-after') || payload.parameters?.retry_after || 0);
+            throw attachTelegramDiagnostics(new Error(description), {
+                failureType: 'api_error',
+                httpStatus: response.status,
+                apiErrorCode: payload.error_code || '',
+                retryAfterMs: retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : 0,
+                description
+            });
     }
 
     return payload;
@@ -3554,7 +3828,7 @@ function formatBytesForAlert(bytes) {
     return `${size} B`;
 }
 
-function formatTelegramFailureDetail({ error, mediaType = '', method = '', sizeBytes = 0, attempts = 1 }) {
+function formatTelegramFailureDetail({ error, mediaType = '', method = '', sizeBytes = 0, attempts = 1, correlationId = '' }) {
     const diagnostics = error?.telegramDiagnostics || {};
     const failureType = diagnostics.failureType || 'unknown_error';
     const causeCode = diagnostics.causeCode ? `/${diagnostics.causeCode}` : '';
@@ -3564,7 +3838,8 @@ function formatTelegramFailureDetail({ error, mediaType = '', method = '', sizeB
         180
     );
     const prefix = mediaType ? `${mediaType} | ukuran=${formatBytesForAlert(sizeBytes)}` : 'pesan teks';
-    return `${prefix} | method=${method || 'sendMessage'} | percobaan=${attempts} | alasan=${failureType}${causeCode}${httpStatus} | detail=${detail}`;
+    const correlation = correlationId ? ` | correlation=${correlationId}` : '';
+    return `${prefix} | method=${method || 'sendMessage'} | percobaan=${attempts} | alasan=${failureType}${causeCode}${httpStatus}${correlation} | detail=${detail}`;
 }
 
 async function withRetries(task, retries, options = {}) {
@@ -3575,8 +3850,10 @@ async function withRetries(task, retries, options = {}) {
         } catch (error) {
             lastError = error;
             if (attempt < retries) {
+                const retryAllowed = !ADAPTIVE_RETRY_ENABLED || isTransientError(error) || options.retryOn?.includes?.(error?.code);
+                if (!retryAllowed) break;
                 const nextAttempt = attempt + 2;
-                const waitMs = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * (attempt + 1));
+                const waitMs = getAdaptiveRetryDelayMs(error, attempt + 1);
                 if (options.metricKey) incrementMetric(options.metricKey, 1);
                 if (options.auditReason) {
                     recordAudit(options.auditReason, {
@@ -3593,7 +3870,7 @@ async function withRetries(task, retries, options = {}) {
     throw lastError;
 }
 
-async function sendTelegramText(text) {
+async function sendTelegramText(text, correlationId = '') {
     let lastAttempt = 0;
     try {
         const result = await withRetries(async (attempt) => {
@@ -3612,7 +3889,8 @@ async function sendTelegramText(text) {
         const detail = formatTelegramFailureDetail({
             error,
             method: 'sendMessage',
-            attempts: lastAttempt || (TELEGRAM_MAX_RETRIES + 1)
+            attempts: lastAttempt || (TELEGRAM_MAX_RETRIES + 1),
+            correlationId
         });
         void sendOperationalAlert('telegram_gagal_kirim', detail, { sendTelegram: false, sendWhatsapp: true });
         throw error;
@@ -3622,7 +3900,7 @@ async function sendTelegramText(text) {
 async function sendToTelegram(buffer, mediaInfo, participant, msg) {
     if (mediaInfo.type === 'text') {
         const caption = buildTelegramCaption(participant, mediaInfo, msg, TELEGRAM_TEXT_LIMIT);
-        return sendTelegramText(caption);
+        return sendTelegramText(caption, getStatusCorrelationId(msg, mediaInfo));
     }
 
     const { method, field } = getTelegramSendMethod(mediaInfo.type);
@@ -3640,7 +3918,7 @@ async function sendToTelegram(buffer, mediaInfo, participant, msg) {
             formData.append(field, new Blob([buffer], { type: mediaInfo.mimetype || 'application/octet-stream' }), fileName);
             const response = await fetchTelegram(method, { method: 'POST', body: formData });
             return parseTelegramResponse(response);
-        }, TELEGRAM_MAX_RETRIES, { metricKey: 'telegramRetried', auditReason: 'telegram_retry_send_media', meta: { method, mediaType: mediaInfo.type } });
+        }, TELEGRAM_MAX_RETRIES, { metricKey: 'telegramRetried', auditReason: 'telegram_retry_send_media', meta: { method, mediaType: mediaInfo.type, correlationId: getStatusCorrelationId(msg, mediaInfo) } });
 
         incrementMetric('telegramSent', 1);
         updateHealth({ lastTelegramSuccessAt: new Date().toISOString() });
@@ -3662,7 +3940,8 @@ async function sendToTelegram(buffer, mediaInfo, participant, msg) {
                 mediaType: telegramError.telegramDiagnostics.mediaType,
                 method,
                 sizeBytes: mediaSizeBytes,
-                attempts: telegramError.telegramDiagnostics.attempts
+                attempts: telegramError.telegramDiagnostics.attempts,
+                correlationId: getStatusCorrelationId(msg, mediaInfo)
             });
             void sendOperationalAlert('telegram_gagal_kirim_media', detail, { sendTelegram: false, sendWhatsapp: true });
         }
@@ -3912,7 +4191,7 @@ async function sendStatusLike(sock, msg, participant, mediaInfo, identity, queue
                 if (result.confirmed) {
                     incrementMetric('statusLiked', 1);
                     recordAudit('status_like_verified', { ...metaBase, statusParticipant }, 'info');
-                    logLike(identity, mediaInfo);
+                    logLike(identity, mediaInfo, metaBase.correlationId);
                 } else {
                     recordAudit('status_like_sent_unconfirmed', { ...metaBase, statusParticipant, reason: result.reason || 'unknown' }, 'warn');
                 }
@@ -3947,7 +4226,7 @@ async function sendStatusLike(sock, msg, participant, mediaInfo, identity, queue
                     if (result.confirmed) {
                         incrementMetric('statusLiked', 1);
                         recordAudit('status_like_fallback_verified', { ...metaBase, fallbackTarget }, 'info');
-                        logLike(identity, mediaInfo);
+                        logLike(identity, mediaInfo, metaBase.correlationId);
                     } else {
                         recordAudit('status_like_fallback_unconfirmed', { ...metaBase, fallbackTarget, reason: result.reason || 'unknown' }, 'warn');
                     }
@@ -4148,6 +4427,7 @@ async function drainStatusQueue() {
             if (current.queueKey) queuedStatusKeys.delete(current.queueKey);
             recordAudit('queue_task_stale_socket_skip', {
                 queueKey: current.queueKey || '',
+                correlationId: current.correlationId || getStatusCorrelationId(current.message),
                 socketGeneration: current.socketGeneration,
                 activeSocketGeneration
             }, 'warn');
@@ -4189,9 +4469,10 @@ async function drainStatusQueue() {
             if (canRetry) {
                 incrementMetric('statusRetried', 1);
                 recordAudit('queue_task_retry', {
-                    queueKey: current.queueKey || '',
-                    attempt,
-                    nextAttempt: attempt + 1,
+                queueKey: current.queueKey || '',
+                correlationId: current.correlationId || getStatusCorrelationId(current.message),
+                attempt,
+                nextAttempt: attempt + 1,
                     maxAttempts,
                     error: error?.message || String(error)
                 }, 'warn');
@@ -4201,6 +4482,7 @@ async function drainStatusQueue() {
                     enqueueStatusTask(current.taskFactory, {
                         urgent: current.urgent === true,
                         queueKey: current.queueKey,
+                        correlationId: current.correlationId,
                         attempt: attempt + 1,
                         maxAttempts,
                         createdAt: current.createdAt,
@@ -4415,6 +4697,7 @@ function rememberStatusTaskForReconnect(task) {
         message: task.message,
         urgent: task.urgent === true,
         queueKey: task.queueKey,
+        correlationId: task.correlationId || getStatusCorrelationId(task.message),
         attempt: task.attempt,
         maxAttempts: task.maxAttempts,
         createdAt
@@ -4453,6 +4736,7 @@ function flushReconnectStatusTasks(sock) {
         enqueueStatusTask(() => forwardStatusMedia(sock, task.message), {
             urgent: task.urgent,
             queueKey: task.queueKey,
+            correlationId: task.correlationId,
             attempt: task.attempt,
             maxAttempts: task.maxAttempts,
             createdAt: task.createdAt,
@@ -4490,13 +4774,15 @@ function clearQueuedStatusTasks(reason = 'manual') {
 
 function enqueueStatusTask(taskFactory, options = {}) {
     const queueKey = options.queueKey || '';
+    const correlationId = options.correlationId || getStatusCorrelationId(options.message, options.mediaInfo);
     if (queueKey && DE_DUPLICATE_PENDING_QUEUE && queuedStatusKeys.has(queueKey)) {
-        recordAudit('queue_duplicate_skip', { queueKey }, 'debug');
+        recordAudit('queue_duplicate_skip', { queueKey, correlationId }, 'debug');
         return;
     }
     const task = {
         taskFactory,
         message: options.message || null,
+        correlationId,
         urgent: options.urgent === true,
         queueKey,
         attempt: Math.max(1, Number(options.attempt || 1)),
@@ -4547,7 +4833,7 @@ function enqueueIncomingStatuses(sock, messages = [], source = 'live') {
         });
         if (source === 'history') historyAccepted += 1;
     }
-    if (source === 'history' && detectedCount > 0 && DEBUG_STATUS_TYPE_DETECTION && !ULTRA_MINIMAL_CONSOLE) {
+    if (source === 'history' && detectedCount > 0 && isDiagnosticModeActive() && !ULTRA_MINIMAL_CONSOLE) {
         logHistory(`${detectedCount} status dari sinkronisasi riwayat`);
     }
 }
@@ -4829,7 +5115,7 @@ async function forwardStatusMedia(sock, msg) {
         incrementMetric('statusForwarded', 1);
         updateHealth({ lastStatusForwardedAt: new Date().toISOString() });
         recordAudit('status_forward_success', buildMessageMeta(msg, mediaInfo, identity), 'info');
-        logSend(mediaInfo, identity, mediaInfo.statusCategory);
+        logSend(mediaInfo, identity, mediaInfo.statusCategory, getStatusCorrelationId(msg, mediaInfo, statusPrimaryKey));
         return true;
     } catch (error) {
         releaseFingerprints(statusPrimaryKey, activeFingerprints);
@@ -4862,12 +5148,15 @@ async function connectToWhatsApp() {
     connectJob = (async () => {
         await loadBaileys();
         validateConfig();
+        initializeDiagnosticMode();
         restoreAuthFromBackupIfNeeded();
         showStartupBanner();
         startStorePruneLoop();
         startSignalAuditLoop();
         startHealthCheckLoop();
         startOperationalCleanupLoop();
+        startCapacityCheckLoop();
+        startOperationalBackupLoop();
 
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
         registerSelfIdentity(PAIRING_PHONE_JID);
@@ -5071,6 +5360,8 @@ function gracefulShutdown(signal) {
     stopSignalAuditLoop();
     stopHealthCheckLoop();
     stopOperationalCleanupLoop();
+    stopCapacityCheckLoop();
+    stopOperationalBackupLoop();
     clearReconnectTimer();
     persistOperationalSnapshot(`shutdown:${signal}`);
     closeAntiSpamStorage();
@@ -5093,6 +5384,8 @@ process.on('uncaughtException', (error) => {
     stopSignalAuditLoop();
     stopHealthCheckLoop();
     stopOperationalCleanupLoop();
+    stopCapacityCheckLoop();
+    stopOperationalBackupLoop();
     clearReconnectTimer();
     persistOperationalSnapshot('uncaughtException');
     closeAntiSpamStorage();
@@ -5111,6 +5404,8 @@ process.on('unhandledRejection', (reason) => {
     stopSignalAuditLoop();
     stopHealthCheckLoop();
     stopOperationalCleanupLoop();
+    stopCapacityCheckLoop();
+    stopOperationalBackupLoop();
     clearReconnectTimer();
     persistOperationalSnapshot('unhandledRejection');
     closeAntiSpamStorage();
