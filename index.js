@@ -2336,8 +2336,8 @@ function startPresenceKeepAlive(sock) {
 function scheduleReconnect() {
     if (reconnectTimeout) return;
 
-    const nextCount = recordReconnectAttempt();
-    logError('Koneksi ulang dijadwalkan', `${Math.ceil(RECONNECT_DELAY_MS / 1000)} detik lagi | percobaan hari ini: ${nextCount}`);
+    recordReconnectAttempt();
+    logError('Koneksi ulang dijadwalkan', `${Math.ceil(RECONNECT_DELAY_MS / 1000)} detik lagi`);
     reconnectTimeout = setTimeout(() => {
         reconnectTimeout = null;
         connectToWhatsApp().catch((error) => {
@@ -4731,7 +4731,7 @@ async function connectToWhatsApp() {
                 });
                 recordAudit('connection_close', { statusCode, shouldReconnect }, shouldReconnect ? 'warn' : 'error');
                 if (shouldReconnect) incrementMetric('reconnects', 1);
-                logError('WhatsApp terputus', `koneksi ulang=${shouldReconnect ? 'ya' : 'tidak'}`);
+                logError('WhatsApp terputus', 'koneksi ulang');
                 if (shouldReconnect) {
                     scheduleReconnect();
                 } else {
