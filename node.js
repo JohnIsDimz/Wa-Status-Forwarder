@@ -92,6 +92,60 @@ function createConsoleHelpers(options = {}) {
         }
     }
 
+    function logConfigValidation(summary = {}) {
+        const status = summary.valid === false ? 'GAGAL' : 'VALID';
+        const rows = [
+            { label: 'STATUS', value: status, color: summary.valid === false ? ANSI.red : ANSI.green },
+            { label: 'PRESET', value: summary.preset || '-', color: ANSI.cyan },
+            { label: 'PEMERIKSAAN', value: `${summary.checked ?? 0} pengaturan`, color: ANSI.blue }
+        ];
+        if (summary.errors > 0) {
+            rows.push({ label: 'KESALAHAN', value: `${summary.errors} item`, color: ANSI.red });
+        }
+        if (summary.warnings > 0) {
+            rows.push({ label: 'PERINGATAN', value: `${summary.warnings} item`, color: ANSI.yellow });
+        }
+        rows.push({ label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow });
+        renderLabeledConsoleBox('VALIDASI KONFIGURASI', summary.valid === false ? ANSI.red : ANSI.green, rows);
+    }
+
+    function logOperationalHealth(summary = {}) {
+        const status = String(summary.status || 'UNKNOWN').toUpperCase();
+        const statusColor = status === 'SEHAT' || status === 'CONNECTED' ? ANSI.green : (status === 'WARNING' ? ANSI.yellow : ANSI.cyan);
+        const rows = [
+            { label: 'STATUS BOT', value: status, color: statusColor },
+            { label: 'WHATSAPP', value: summary.whatsapp || '-', color: ANSI.cyan },
+            { label: 'TELEGRAM', value: summary.telegram || '-', color: ANSI.blue },
+            { label: 'DATABASE', value: summary.database || '-', color: ANSI.magenta },
+            { label: 'ANTREAN', value: summary.queue || '-', color: ANSI.yellow },
+            { label: 'BACKLOG', value: summary.backlog || '-', color: ANSI.yellow }
+        ];
+        if (summary.lastStatusAt) {
+            rows.push({ label: 'STATUS TERAKHIR', value: summary.lastStatusAt, color: ANSI.gray });
+        }
+        if (summary.lastForwardedAt) {
+            rows.push({ label: 'KIRIM TERAKHIR', value: summary.lastForwardedAt, color: ANSI.gray });
+        }
+        if (summary.lastError) {
+            rows.push({ label: 'ERROR TERAKHIR', value: summary.lastError, color: ANSI.red });
+        }
+        rows.push({ label: 'DIPERIKSA PADA', value: formatDisplayDateTime(), color: ANSI.yellow });
+        renderLabeledConsoleBox('HEALTH OPERASIONAL', status === 'WARNING' ? ANSI.yellow : ANSI.blue, rows);
+    }
+
+    function logBacklogRecovery(summary = {}) {
+        const rows = [
+            { label: 'DITEMUKAN', value: `${summary.found ?? 0} item`, color: ANSI.cyan },
+            { label: 'DIJADWALKAN', value: `${summary.scheduled ?? 0} item`, color: ANSI.green },
+            { label: 'KADALUARSA', value: `${summary.expired ?? 0} item`, color: ANSI.yellow },
+            { label: 'TIDAK VALID', value: `${summary.invalid ?? 0} item`, color: ANSI.red },
+            { label: 'TERSISA', value: `${summary.remaining ?? 0} item`, color: ANSI.magenta },
+            { label: 'SUMBER', value: summary.source || 'SQLite', color: ANSI.blue },
+            { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
+        ];
+        renderLabeledConsoleBox('PEMULIHAN BACKLOG', ANSI.green, rows);
+    }
+
     function logBoot(message) {
         renderLabeledConsoleBox('MEMULAI BOT', ANSI.cyan, [
             { label: 'KETERANGAN', value: message, color: ANSI.green },
@@ -331,6 +385,9 @@ function createConsoleHelpers(options = {}) {
         logDebug,
         logWait,
         logDatabaseCheck,
+        logConfigValidation,
+        logOperationalHealth,
+        logBacklogRecovery,
         logSignalAudit,
         logDailySummary,
         logDatabaseResetReport,

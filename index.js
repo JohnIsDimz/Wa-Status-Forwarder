@@ -79,6 +79,10 @@ const SESSION_BACKUP_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(OPERATIONS.ses
 const DATABASE_RESET_HOUR_WIB = Number(OPERATIONS.databaseResetHourWib ?? 0);
 const DATABASE_INTEGRITY_CHECK_INTERVAL_MS = Math.max(60 * 1000, Number(OPERATIONS.databaseIntegrityCheckMinutes || 30) * 60 * 1000);
 const SIGNAL_AUDIT_INTERVAL_MS = Math.max(60 * 1000, Number(OPERATIONS.signalAuditIntervalMinutes || 10) * 60 * 1000);
+const HEALTH_CHECK_INTERVAL_MS = Math.max(60 * 1000, Number(OPERATIONS.healthCheckIntervalMinutes || 15) * 60 * 1000);
+const OPERATIONAL_CLEANUP_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(OPERATIONS.operationalCleanupIntervalMinutes || 60) * 60 * 1000);
+const OPERATIONAL_RETENTION_MS = Math.max(24 * 60 * 60 * 1000, Number(OPERATIONS.operationalRetentionDays || 14) * 24 * 60 * 60 * 1000);
+const TEMP_FILE_RETENTION_MS = Math.max(5 * 60 * 1000, Number(OPERATIONS.temporaryFileRetentionMinutes || 60) * 60 * 1000);
 const SQLITE_DOCUMENT_WRITE_DEBOUNCE_MS = Math.max(50, Number(OPERATIONS.sqliteDocumentWriteDebounceMs || 750));
 const DAILY_SUMMARY_RETENTION_DAYS = Math.max(1, Number(OPERATIONS.dailySummaryRetentionDays || 30));
 const DAILY_SUMMARY_MAX_FAILURES = Math.max(5, Number(OPERATIONS.dailySummaryMaxFailures || 50));
@@ -223,6 +227,9 @@ let sessionBackupInterval = null;
 let storePruneInterval = null;
 let databaseResetTimeout = null;
 let signalAuditInterval = null;
+let healthCheckInterval = null;
+let operationalCleanupInterval = null;
+let configurationValidationShown = false;
 let queueActive = false;
 let lastPhoneNumber = null;
 let telegramConfigWarned = false;
@@ -291,6 +298,9 @@ const {
     logDebug,
     logWait,
     logDatabaseCheck,
+    logConfigValidation,
+    logOperationalHealth,
+    logBacklogRecovery,
     logSignalAudit,
     logDailySummary,
     logDatabaseResetReport,
@@ -1467,6 +1477,13 @@ const healthStore = readJsonFile(HEALTH_STORE_FILE, {
         status: { lastAt: null, lastSource: '' },
         antiCall: { lastAt: null, lastSource: '' },
         autoBlock: { lastAt: null, lastSource: '' }
+    },
+    operational: {
+        lastHealthCheckAt: null,
+        lastCleanupAt: null,
+        lastBacklogRecoveryAt: null,
+        backlogRecovery: { found: 0, scheduled: 0, expired: 0, invalid: 0, remaining: 0, source: 'SQLite' },
+        cleanup: { auditRemoved: 0, failedJobsRemoved: 0, tempFilesRemoved: 0 }
     }
 });
 const runtimeState = readJsonFile(RUNTIME_STATE_FILE, {
@@ -1505,6 +1522,14 @@ const metricsStore = readJsonFile(METRICS_STORE_FILE, {
     callsBlocked: 0,
     reconnects: 0,
     queueDrops: 0,
+    backlogRecoveryRuns: 0,
+    backlogRecoveryFound: 0,
+    backlogRecoveryScheduled: 0,
+    backlogRecoveryExpired: 0,
+    backlogRecoveryInvalid: 0,
+    backlogRecoveryFailures: 0,
+    operationalPruneRuns: 0,
+    operationalTempFilesRemoved: 0,
     updatedAt: null
 });
 const auditStore = readJsonFile(AUDIT_STORE_FILE, { entries: [] });
@@ -1578,6 +1603,144 @@ function syncQueueHealth() {
 function updateHealth(patch = {}) {
     Object.assign(healthStore, patch, { updatedAt: new Date().toISOString() });
     saveHealthStore();
+}
+
+function ensureOperationalHealthState() {
+    if (!healthStore.operational || typeof healthStore.operational !== 'object') {
+        healthStore.operational = {};
+    }
+    if (!healthStore.operational.backlogRecovery || typeof healthStore.operational.backlogRecovery !== 'object') {
+        healthStore.operational.backlogRecovery = { found: 0, scheduled: 0, expired: 0, invalid: 0, remaining: 0, source: 'SQLite' };
+    }
+    if (!healthStore.operational.cleanup || typeof healthStore.operational.cleanup !== 'object') {
+        healthStore.operational.cleanup = { auditRemoved: 0, failedJobsRemoved: 0, tempFilesRemoved: 0 };
+    }
+}
+
+function getPendingStatusBacklogCount() {
+    if (!antiSpamStatements?.countPendingStatuses) return 0;
+    try {
+        return Number(antiSpamStatements.countPendingStatuses.get()?.total || 0);
+    } catch {
+        return 0;
+    }
+}
+
+function emitOperationalHealth(reason = 'interval') {
+    ensureOperationalHealthState();
+    const pendingBacklog = getPendingStatusBacklogCount();
+    const queueTotal = urgentStatusQueue.length + normalStatusQueue.length;
+    const now = new Date().toISOString();
+    const whatsappStatus = waConnectionReady ? 'SIAP' : (waConnectionOpen ? 'TERHUBUNG' : 'TERPUTUS');
+    const telegramStatus = isTelegramConfigured() ? 'TERKONFIGURASI' : 'BELUM DIATUR';
+    const databaseStatus = hasAntiSpamSqlite() ? 'AKTIF' : 'GAGAL';
+    const botStatus = waConnectionReady && databaseStatus === 'AKTIF' && telegramStatus === 'TERKONFIGURASI'
+        ? 'SEHAT'
+        : (healthStore.status || 'INITIALIZING');
+
+    healthStore.operational.lastHealthCheckAt = now;
+    healthStore.operational.lastHealthCheckReason = reason;
+    healthStore.operational.queueTotal = queueTotal;
+    healthStore.operational.pendingBacklog = pendingBacklog;
+    updateHealth({ operational: healthStore.operational });
+
+    if (!ULTRA_MINIMAL_CONSOLE) {
+        logOperationalHealth({
+            status: botStatus,
+            whatsapp: whatsappStatus,
+            telegram: telegramStatus,
+            database: databaseStatus,
+            queue: `${queueTotal} item (${urgentStatusQueue.length} prioritas, ${normalStatusQueue.length} normal)`,
+            backlog: `${pendingBacklog} item tersimpan`,
+            lastStatusAt: formatLastSignalAt(healthStore.lastStatusReceivedAt) || 'belum ada',
+            lastForwardedAt: formatLastSignalAt(healthStore.lastStatusForwardedAt) || 'belum ada',
+            lastError: healthStore.lastErrorMessage || ''
+        });
+    }
+}
+
+function startHealthCheckLoop() {
+    if (healthCheckInterval) {
+        clearInterval(healthCheckInterval);
+        healthCheckInterval = null;
+    }
+    emitOperationalHealth('startup');
+    healthCheckInterval = setInterval(() => {
+        emitOperationalHealth('interval');
+    }, HEALTH_CHECK_INTERVAL_MS);
+}
+
+function stopHealthCheckLoop() {
+    if (healthCheckInterval) {
+        clearInterval(healthCheckInterval);
+        healthCheckInterval = null;
+    }
+}
+
+function parseOperationalEntryTime(entry) {
+    const timestamp = Date.parse(entry?.time || '');
+    return Number.isFinite(timestamp) ? timestamp : Date.now();
+}
+
+function cleanupOperationalFiles(reason = 'interval') {
+    const cutoff = Date.now() - OPERATIONAL_RETENTION_MS;
+    const previousAuditCount = Array.isArray(auditStore.entries) ? auditStore.entries.length : 0;
+    const previousFailedJobCount = Array.isArray(failedJobStore.jobs) ? failedJobStore.jobs.length : 0;
+    const keptAuditEntries = (auditStore.entries || [])
+        .filter((entry) => parseOperationalEntryTime(entry) >= cutoff)
+        .slice(-MAX_AUDIT_ENTRIES);
+    const keptFailedJobs = (failedJobStore.jobs || [])
+        .filter((entry) => parseOperationalEntryTime(entry) >= cutoff)
+        .slice(-MAX_FAILED_JOBS);
+    const auditRemoved = Math.max(0, previousAuditCount - keptAuditEntries.length);
+    const failedJobsRemoved = Math.max(0, previousFailedJobCount - keptFailedJobs.length);
+
+    auditStore.entries = keptAuditEntries;
+    failedJobStore.jobs = keptFailedJobs;
+    if (auditRemoved > 0) saveAuditStore();
+    if (failedJobsRemoved > 0) saveFailedJobStore();
+
+    let tempFilesRemoved = 0;
+    try {
+        for (const name of fs.readdirSync(__dirname)) {
+            if (!name.endsWith('.tmp')) continue;
+            const filePath = path.join(__dirname, name);
+            const stat = fs.statSync(filePath);
+            if (!stat.isFile() || Date.now() - stat.mtimeMs < TEMP_FILE_RETENTION_MS) continue;
+            fs.rmSync(filePath, { force: true });
+            tempFilesRemoved += 1;
+        }
+    } catch (error) {
+        recordAudit('operational_cleanup_failed', { reason, error: error?.message || String(error) }, 'warn');
+    }
+
+    ensureOperationalHealthState();
+    healthStore.operational.lastCleanupAt = new Date().toISOString();
+    healthStore.operational.lastCleanupReason = reason;
+    healthStore.operational.cleanup = { auditRemoved, failedJobsRemoved, tempFilesRemoved };
+    metricsStore.operationalPruneRuns = Number(metricsStore.operationalPruneRuns || 0) + 1;
+    metricsStore.operationalTempFilesRemoved = Number(metricsStore.operationalTempFilesRemoved || 0) + tempFilesRemoved;
+    saveMetricsStore();
+    updateHealth({ operational: healthStore.operational });
+    return { auditRemoved, failedJobsRemoved, tempFilesRemoved };
+}
+
+function startOperationalCleanupLoop() {
+    if (operationalCleanupInterval) {
+        clearInterval(operationalCleanupInterval);
+        operationalCleanupInterval = null;
+    }
+    cleanupOperationalFiles('startup');
+    operationalCleanupInterval = setInterval(() => {
+        cleanupOperationalFiles('interval');
+    }, OPERATIONAL_CLEANUP_INTERVAL_MS);
+}
+
+function stopOperationalCleanupLoop() {
+    if (operationalCleanupInterval) {
+        clearInterval(operationalCleanupInterval);
+        operationalCleanupInterval = null;
+    }
 }
 
 function recordReconnectAttempt() {
@@ -2275,17 +2438,58 @@ async function resolveStatusReference(mediaInfo, identity, msg) {
 }
 
 function validateConfig() {
-    if (antiSpamStorageFatalError) {
-        throw new Error(`Storage SQLite gagal: ${antiSpamStorageFatalError}`);
+    const errors = [];
+    const warnings = [];
+    let checked = 0;
+    const check = (condition, message, level = 'error') => {
+        checked += 1;
+        if (!condition) (level === 'warning' ? warnings : errors).push(message);
+    };
+    const positiveNumber = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
+    const nonNegativeNumber = (value) => Number.isFinite(Number(value)) && Number(value) >= 0;
+
+    check(Boolean(config.activePreset) && Array.isArray(config.availablePresets) && config.availablePresets.includes(config.activePreset), 'Preset aktif tidak tersedia');
+    check(!antiSpamStorageFatalError, `Storage SQLite gagal${antiSpamStorageFatalError ? `: ${antiSpamStorageFatalError}` : ''}`);
+    check(Boolean(PAIRING_PHONE_NUMBER), 'Nomor WhatsApp belum diisi pada whatsapp.phoneNumber');
+    check(isValidPairingPhoneNumber(PAIRING_PHONE_NUMBER), 'Format whatsapp.phoneNumber tidak valid; gunakan nomor internasional 10-15 digit');
+    check(Boolean(TELEGRAM_BOT_TOKEN) && TELEGRAM_BOT_TOKEN !== 'ISI_BOT_TOKEN_TELEGRAM', 'Bot token Telegram belum diisi pada telegram.botToken');
+    check(Boolean(TELEGRAM_CHAT_ID) && TELEGRAM_CHAT_ID !== 'ISI_CHAT_ID_TELEGRAM', 'Chat ID Telegram belum diisi pada telegram.chatId');
+    check(MAX_QUEUE_SIZE >= MAX_URGENT_QUEUE_SIZE, 'Config antrean tidak valid: maxQueueSize harus >= maxUrgentQueueSize');
+    check(MAX_HISTORY_ENQUEUE_PER_SYNC <= MAX_QUEUE_SIZE, 'Config antrean tidak valid: maxHistoryEnqueuePerSync terlalu besar');
+    check(Array.isArray(STATUS.allowedMediaTypes) && STATUS.allowedMediaTypes.length > 0, 'statusForwarder.allowedMediaTypes harus berisi minimal satu jenis media');
+    check(positiveNumber(OPERATIONS.databaseIntegrityCheckMinutes), 'operations.databaseIntegrityCheckMinutes harus lebih besar dari 0');
+    check(positiveNumber(OPERATIONS.healthCheckIntervalMinutes), 'operations.healthCheckIntervalMinutes harus lebih besar dari 0');
+    check(positiveNumber(OPERATIONS.operationalCleanupIntervalMinutes), 'operations.operationalCleanupIntervalMinutes harus lebih besar dari 0');
+    check(positiveNumber(OPERATIONS.operationalRetentionDays), 'operations.operationalRetentionDays harus lebih besar dari 0');
+    check(positiveNumber(OPERATIONS.temporaryFileRetentionMinutes), 'operations.temporaryFileRetentionMinutes harus lebih besar dari 0');
+    check(positiveNumber(OPERATIONS.sessionBackupIntervalMinutes), 'operations.sessionBackupIntervalMinutes harus lebih besar dari 0');
+    check(positiveNumber(STATUS.maxMediaSizeMB), 'statusForwarder.maxMediaSizeMB harus lebih besar dari 0');
+    check(nonNegativeNumber(STATUS.likeRetries), 'statusForwarder.likeRetries tidak boleh negatif');
+    check(positiveNumber(STATUS.likeVerificationTimeoutSeconds), 'statusForwarder.likeVerificationTimeoutSeconds harus lebih besar dari 0');
+    check(nonNegativeNumber(STATUS.statusTaskRetryAttempts), 'statusForwarder.statusTaskRetryAttempts tidak boleh negatif');
+    check(nonNegativeNumber(STATUS.statusTaskRetryDelayMs), 'statusForwarder.statusTaskRetryDelayMs tidak boleh negatif');
+    check(MAX_SESSION_BACKUPS > 0, 'operations.maxSessionBackups harus lebih besar dari 0');
+    check(MAX_AUDIT_ENTRIES >= 50, 'operations.maxAuditEntries minimal 50');
+    check(MAX_FAILED_JOBS >= 20, 'operations.maxFailedJobs minimal 20');
+    check(TELEGRAM_REQUEST_TIMEOUT_MS >= 5000, 'telegram.requestTimeoutMs minimal 5000 ms');
+    check(typeof TELEGRAM_MAX_RETRIES === 'number' && TELEGRAM_MAX_RETRIES >= 0, 'telegram.maxRetries tidak boleh negatif');
+    check(Boolean(TELEGRAM_FOOTER_TEXT), 'telegram.footerText kosong; footer tidak akan ditampilkan', 'warning');
+
+    if (!configurationValidationShown || errors.length > 0) {
+        logConfigValidation({
+            valid: errors.length === 0,
+            preset: config.activePreset || '-',
+            checked,
+            errors: errors.length,
+            warnings: warnings.length
+        });
+        configurationValidationShown = true;
     }
-    if (!PAIRING_PHONE_NUMBER) throw new Error('Nomor WhatsApp belum diisi di config.js pada whatsapp.phoneNumber');
-    if (!isValidPairingPhoneNumber(PAIRING_PHONE_NUMBER)) {
-        throw new Error('Format whatsapp.phoneNumber tidak valid. Gunakan nomor internasional 10-15 digit, contoh: 628123456789');
+
+    if (errors.length > 0) {
+        throw new Error(`Konfigurasi tidak valid: ${errors.join(' | ')}`);
     }
-    if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN === 'ISI_BOT_TOKEN_TELEGRAM') throw new Error('Bot token Telegram belum diisi di config.js pada telegram.botToken');
-    if (!TELEGRAM_CHAT_ID || TELEGRAM_CHAT_ID === 'ISI_CHAT_ID_TELEGRAM') throw new Error('Chat ID Telegram belum diisi di config.js pada telegram.chatId');
-    if (MAX_QUEUE_SIZE < MAX_URGENT_QUEUE_SIZE) throw new Error('Config queue tidak valid: maxQueueSize harus >= maxUrgentQueueSize');
-    if (MAX_HISTORY_ENQUEUE_PER_SYNC > MAX_QUEUE_SIZE) throw new Error('Config queue tidak valid: maxHistoryEnqueuePerSync terlalu besar');
+    return { valid: true, checked, errors, warnings };
 }
 
 function showStartupBanner() {
@@ -4122,6 +4326,31 @@ function recordPendingStatusError(queueKey, error) {
     }
 }
 
+function publishBacklogRecovery(summary = {}) {
+    const normalized = {
+        found: Math.max(0, Number(summary.found || 0)),
+        scheduled: Math.max(0, Number(summary.scheduled || 0)),
+        expired: Math.max(0, Number(summary.expired || 0)),
+        invalid: Math.max(0, Number(summary.invalid || 0)),
+        remaining: Math.max(0, Number(summary.remaining || 0)),
+        source: String(summary.source || 'SQLite')
+    };
+    ensureOperationalHealthState();
+    healthStore.operational.lastBacklogRecoveryAt = new Date().toISOString();
+    healthStore.operational.backlogRecovery = normalized;
+    metricsStore.backlogRecoveryRuns = Number(metricsStore.backlogRecoveryRuns || 0) + 1;
+    metricsStore.backlogRecoveryFound = Number(metricsStore.backlogRecoveryFound || 0) + normalized.found;
+    metricsStore.backlogRecoveryScheduled = Number(metricsStore.backlogRecoveryScheduled || 0) + normalized.scheduled;
+    metricsStore.backlogRecoveryExpired = Number(metricsStore.backlogRecoveryExpired || 0) + normalized.expired;
+    metricsStore.backlogRecoveryInvalid = Number(metricsStore.backlogRecoveryInvalid || 0) + normalized.invalid;
+    saveMetricsStore();
+    updateHealth({ operational: healthStore.operational });
+    if (!ULTRA_MINIMAL_CONSOLE) {
+        logBacklogRecovery(normalized);
+    }
+    return normalized;
+}
+
 function loadPendingStatusBacklog(sock) {
     if (!sock || !antiSpamStatements?.selectPendingStatuses) return;
     let rows = [];
@@ -4129,20 +4358,29 @@ function loadPendingStatusBacklog(sock) {
         rows = antiSpamStatements.selectPendingStatuses.all(MAX_QUEUE_SIZE);
     } catch (error) {
         recordAudit('status_backlog_load_failed', { error: error?.message || String(error) }, 'warn');
+        publishBacklogRecovery({ source: 'SQLite gagal', remaining: 0 });
+        metricsStore.backlogRecoveryFailures = Number(metricsStore.backlogRecoveryFailures || 0) + 1;
+        saveMetricsStore();
         return;
     }
 
+    let scheduled = 0;
+    let expired = 0;
+    let invalid = 0;
     for (const row of rows) {
         const message = deserializeStatusMessage(row.message_blob);
         if (!message || !isStatusLikeMessage(message)) {
+            invalid += 1;
             acknowledgePendingStatus(row.queue_key);
             continue;
         }
         if (isHistoryStatusExpired(message)) {
+            expired += 1;
             incrementMetric('statusHistorySkippedOld', 1);
             acknowledgePendingStatus(row.queue_key);
             continue;
         }
+        scheduled += 1;
         enqueueStatusTask(() => forwardStatusMedia(sock, message), {
             urgent: true,
             queueKey: row.queue_key,
@@ -4155,8 +4393,16 @@ function loadPendingStatusBacklog(sock) {
         });
     }
 
+    const recovery = publishBacklogRecovery({
+        found: rows.length,
+        scheduled,
+        expired,
+        invalid,
+        remaining: getPendingStatusBacklogCount(),
+        source: 'SQLite'
+    });
     if (rows.length > 0) {
-        recordAudit('status_backlog_loaded', { count: rows.length }, 'info');
+        recordAudit('status_backlog_loaded', recovery, 'info');
     }
 }
 
@@ -4190,9 +4436,20 @@ function flushReconnectStatusTasks(sock) {
     if (!sock || pendingReconnectStatusTasks.length === 0) return;
     const tasks = pendingReconnectStatusTasks.splice(0, pendingReconnectStatusTasks.length);
     const now = Date.now();
+    let scheduled = 0;
+    let expired = 0;
+    let invalid = 0;
     for (const task of tasks) {
-        if (!task?.message || now - Number(task.createdAt || now) > RECONNECT_QUEUE_RETENTION_MS) continue;
+        if (!task?.message) {
+            invalid += 1;
+            continue;
+        }
+        if (now - Number(task.createdAt || now) > RECONNECT_QUEUE_RETENTION_MS) {
+            expired += 1;
+            continue;
+        }
         incrementMetric('statusReconnectRequeued', 1);
+        scheduled += 1;
         enqueueStatusTask(() => forwardStatusMedia(sock, task.message), {
             urgent: task.urgent,
             queueKey: task.queueKey,
@@ -4204,6 +4461,14 @@ function flushReconnectStatusTasks(sock) {
             socketGeneration: activeSocket === sock ? activeSocketGeneration : 0
         });
     }
+    publishBacklogRecovery({
+        found: tasks.length,
+        scheduled,
+        expired,
+        invalid,
+        remaining: getPendingStatusBacklogCount(),
+        source: 'Reconnect'
+    });
 }
 
 function clearQueuedStatusTasks(reason = 'manual') {
@@ -4334,6 +4599,7 @@ function markWhatsAppReady(sock, reason = 'received_pending_notifications') {
     });
     recordAudit('connection_caught_up', { reason }, 'info');
     loadPendingStatusBacklog(sock);
+    emitOperationalHealth('whatsapp_ready');
     flushPostConnectSystemMessages();
     flushPreConnectEventBuffers(sock);
 }
@@ -4600,6 +4866,8 @@ async function connectToWhatsApp() {
         showStartupBanner();
         startStorePruneLoop();
         startSignalAuditLoop();
+        startHealthCheckLoop();
+        startOperationalCleanupLoop();
 
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
         registerSelfIdentity(PAIRING_PHONE_JID);
@@ -4696,6 +4964,7 @@ async function connectToWhatsApp() {
                 recordAudit('connection_open', { phone: PAIRING_PHONE_NUMBER, catchUp: 'pending' }, 'info');
                 waConnectedOnce = true;
                 logWaConnected();
+                emitOperationalHealth('connection_open');
                 schedulePendingNotificationsFallback(sock, socketGeneration);
             }
 
@@ -4800,6 +5069,8 @@ function gracefulShutdown(signal) {
     stopSessionBackupLoop();
     stopStorePruneLoop();
     stopSignalAuditLoop();
+    stopHealthCheckLoop();
+    stopOperationalCleanupLoop();
     clearReconnectTimer();
     persistOperationalSnapshot(`shutdown:${signal}`);
     closeAntiSpamStorage();
@@ -4820,6 +5091,8 @@ process.on('uncaughtException', (error) => {
     stopSessionBackupLoop();
     stopStorePruneLoop();
     stopSignalAuditLoop();
+    stopHealthCheckLoop();
+    stopOperationalCleanupLoop();
     clearReconnectTimer();
     persistOperationalSnapshot('uncaughtException');
     closeAntiSpamStorage();
@@ -4836,6 +5109,8 @@ process.on('unhandledRejection', (reason) => {
     stopSessionBackupLoop();
     stopStorePruneLoop();
     stopSignalAuditLoop();
+    stopHealthCheckLoop();
+    stopOperationalCleanupLoop();
     clearReconnectTimer();
     persistOperationalSnapshot('unhandledRejection');
     closeAntiSpamStorage();
@@ -4850,6 +5125,8 @@ connectToWhatsApp().catch((error) => {
     void sendOperationalAlert('startup_gagal', message, { sendTelegram: true, sendWhatsapp: false });
     stopStorePruneLoop();
     stopSignalAuditLoop();
+    stopHealthCheckLoop();
+    stopOperationalCleanupLoop();
     persistOperationalSnapshot('startup_failure');
     closeAntiSpamStorage();
 
@@ -4862,6 +5139,7 @@ connectToWhatsApp().catch((error) => {
         || message.includes('telegram.botToken')
         || message.includes('telegram.chatId')
         || message.includes('Config queue tidak valid')
+        || message.includes('Config antrean tidak valid')
         || message.includes('Format whatsapp.phoneNumber tidak valid')
     ) {
         process.exit(EXIT_CODE_FATAL_CONFIG);

@@ -142,6 +142,23 @@ Jalankan pemeriksaan integritas ketika bot tidak sedang menulis database:
 node -e "const DB=require('better-sqlite3'); const db=new DB('status-antispam.db',{readonly:true,fileMustExist:true}); console.log(db.pragma('journal_mode',{simple:true})); console.log(db.pragma('quick_check',{simple:true})); db.close();"
 ```
 
+## Operasional dan pemulihan
+
+Saat startup, Bot memvalidasi preset aktif, kredensial Telegram, nomor WhatsApp, batas antrean, tipe media, nilai retry, interval pemeliharaan, dan pengaturan storage. Kesalahan konfigurasi fundamental ditampilkan dengan jelas dan menghentikan startup agar Bot tidak berjalan dalam kondisi yang tidak aman.
+
+Health operasional disimpan bersama state Bot dan diringkas di console secara berkala. Informasinya mencakup kesiapan WhatsApp, konfigurasi Telegram, status SQLite, ukuran antrean, jumlah backlog tersimpan, Status terakhir, pengiriman terakhir, dan error terakhir.
+
+State audit dan failed jobs dipelihara otomatis berdasarkan batas jumlah dan retensi konfigurasi. File sementara stale dapat dibersihkan secara berkala. Pembersihan ini tidak menghapus folder sesi aktif maupun file `status-antispam.db-wal` dan `status-antispam.db-shm` saat database masih digunakan.
+
+Ketika Bot kembali siap setelah reconnect, backlog SQLite dan task reconnect diringkas berdasarkan jumlah item ditemukan, dijadwalkan ulang, kadaluarsa, tidak valid, dan tersisa. Ringkasan tersebut dicatat ke health state, metrics, audit, dan console sehingga pemulihan dapat ditelusuri tanpa membuka `message_blob` secara manual.
+
+| Pengaturan | Fungsi |
+|---|---|
+| `healthCheckIntervalMinutes` | Interval ringkasan health operasional. |
+| `operationalCleanupIntervalMinutes` | Interval pembersihan state operasional dan file sementara. |
+| `operationalRetentionDays` | Retensi audit dan failed jobs. |
+| `temporaryFileRetentionMinutes` | Umur minimum file `.tmp` sebelum dibersihkan. |
+
 ## Konfigurasi utama
 
 Semua konfigurasi operasional berada di `config.js`. Nilai penting yang biasanya disesuaikan adalah:
