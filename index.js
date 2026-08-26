@@ -212,7 +212,6 @@ const RUNTIME_BUSY_QUEUE_THRESHOLD = Math.max(5, Number(STATUS.runtimeBusyQueueT
 const RUNTIME_BUSY_MAX_VIEW_DELAY_MS = Math.max(0, Number(STATUS.runtimeBusyMaxViewDelayMs || 1200));
 const RUNTIME_BUSY_POST_READ_DELAY_MS = Math.max(0, Number(STATUS.runtimeBusyPostReadDelayMs || 0));
 const STATUS_DATABASE_FILE = path.join(__dirname, STATUS.databaseFile || config.storage?.sqlite?.file || 'status-antispam.db');
-const STATUS_DATABASE_WARM_CACHE_LIMIT = Math.max(0, Number(STATUS.databaseWarmCacheLimit || 5000));
 
 const DAILY_STATUS_SUMMARY_RUNTIME_KEY = 'daily_status_summary_runtime';
 

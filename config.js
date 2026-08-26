@@ -116,8 +116,7 @@ const PRESETS = {
             antiSpamMode: 'ai-analyzer',
             useSqliteStore: true,
             databaseFile: 'status-antispam.db',
-            databaseWalMode: true,
-            databaseWarmCacheLimit: 5000
+            databaseWalMode: true
         }
     },
 
@@ -235,8 +234,7 @@ const PRESETS = {
             antiSpamMode: 'ai-analyzer',
             useSqliteStore: true,
             databaseFile: 'status-antispam.db',
-            databaseWalMode: true,
-            databaseWarmCacheLimit: 8000
+            databaseWalMode: true
         }
     }
 };
