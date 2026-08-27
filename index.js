@@ -1697,7 +1697,7 @@ function emitOperationalHealth(reason = 'interval') {
             storage: healthStore.operational.capacity
                 ? `${Number(healthStore.operational.capacity.freePercent || 0).toFixed(1)}% bebas`
                 : 'belum diperiksa',
-            queue: `${queueTotal} item (${urgentStatusQueue.length} prioritas, ${normalStatusQueue.length} normal)`,
+            queue: `${queueTotal} item`,
             lastStatusAt: formatLastSignalAt(healthStore.lastStatusReceivedAt) || 'belum ada'
         });
     }
