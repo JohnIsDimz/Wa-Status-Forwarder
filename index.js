@@ -2937,7 +2937,6 @@ function formatOperationalAlert(kind, message) {
         `Status   : ${getOperationalAlertStatus(kind)}`,
         ...String(detail).split('\\n').map((line, index) => `${index === 0 ? 'Detail   : ' : '           '}${line}`),
         `Waktu    : ${formatDisplayDateTime()}`,
-        `Tindakan : ${getOperationalAlertAction(kind)}`,
         '━━━━━━━━━━━━━━━━━━━━'
     ].join('\n');
 }
