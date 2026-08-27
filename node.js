@@ -118,17 +118,10 @@ function createConsoleHelpers(options = {}) {
             { label: 'TELEGRAM', value: summary.telegram || '-', color: ANSI.blue },
             { label: 'DATABASE', value: summary.database || '-', color: ANSI.magenta },
             { label: 'STORAGE', value: summary.storage || '-', color: ANSI.gray },
-            { label: 'ANTREAN', value: summary.queue || '-', color: ANSI.yellow },
-            { label: 'BACKLOG', value: summary.backlog || '-', color: ANSI.yellow }
+            { label: 'ANTREAN', value: summary.queue || '-', color: ANSI.yellow }
         ];
         if (summary.lastStatusAt) {
             rows.push({ label: 'STATUS TERAKHIR', value: summary.lastStatusAt, color: ANSI.gray });
-        }
-        if (summary.lastForwardedAt) {
-            rows.push({ label: 'KIRIM TERAKHIR', value: summary.lastForwardedAt, color: ANSI.gray });
-        }
-        if (summary.lastError) {
-            rows.push({ label: 'ERROR TERAKHIR', value: summary.lastError, color: ANSI.red });
         }
         rows.push({ label: 'DIPERIKSA PADA', value: formatDisplayDateTime(), color: ANSI.yellow });
         renderLabeledConsoleBox('HEALTH OPERASIONAL', status === 'WARNING' ? ANSI.yellow : ANSI.blue, rows);

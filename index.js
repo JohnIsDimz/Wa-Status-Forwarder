@@ -1695,13 +1695,10 @@ function emitOperationalHealth(reason = 'interval') {
             telegram: telegramStatus,
             database: databaseStatus,
             storage: healthStore.operational.capacity
-                ? `${Number(healthStore.operational.capacity.freePercent || 0).toFixed(1)}% bebas | DB ${formatBytesForAlert(healthStore.operational.capacity.databaseBytes || 0)}`
+                ? `${Number(healthStore.operational.capacity.freePercent || 0).toFixed(1)}% bebas`
                 : 'belum diperiksa',
             queue: `${queueTotal} item (${urgentStatusQueue.length} prioritas, ${normalStatusQueue.length} normal)`,
-            backlog: `${pendingBacklog} item tersimpan`,
-            lastStatusAt: formatLastSignalAt(healthStore.lastStatusReceivedAt) || 'belum ada',
-            lastForwardedAt: formatLastSignalAt(healthStore.lastStatusForwardedAt) || 'belum ada',
-            lastError: healthStore.lastErrorMessage || ''
+            lastStatusAt: formatLastSignalAt(healthStore.lastStatusReceivedAt) || 'belum ada'
         });
     }
 }
