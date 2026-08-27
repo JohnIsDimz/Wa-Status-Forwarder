@@ -2907,20 +2907,6 @@ function getOperationalAlertStatus(kind) {
     return statuses[kind] || 'Bot memerlukan pemeriksaan';
 }
 
-function getOperationalAlertAction(kind) {
-    const actions = {
-        sesi_logout: 'Pairing ulang WhatsApp diperlukan sebelum bot dapat bekerja kembali.',
-        startup_gagal: 'Periksa konfigurasi dan log startup, lalu jalankan ulang runner.',
-        pairing_gagal: 'Pastikan nomor dan sesi pairing benar, lalu ulangi pairing.',
-        runtime_error: 'Periksa audit-log.json, failed-jobs.json, dan status service.',
-        database_rusak: 'Backup database sebelum melakukan pemulihan atau pemeriksaan manual.',
-        database_warning: 'Periksa healthcheck dan database sebelum melanjutkan operasi.',
-        telegram_gagal_kirim: 'Periksa bot token, chat ID, koneksi, dan batas API Telegram.',
-        telegram_gagal_kirim_media: 'Periksa ukuran media, koneksi, dan batas API Telegram.'
-    };
-    return actions[kind] || 'Periksa audit-log.json dan healthcheck.json untuk detail.';
-}
-
 function formatOperationalAlert(kind, message) {
     const rawInfo = truncateText(
         String(message || '').split(/\r?\n/).map((line) => normalizeDetailText(line, 180)).filter(Boolean).join('\n'),
@@ -2935,7 +2921,7 @@ function formatOperationalAlert(kind, message) {
         '━━━━━━━━━━━━━━━━━━━━',
         `Jenis    : ${getOperationalAlertLabel(kind)}`,
         `Status   : ${getOperationalAlertStatus(kind)}`,
-        ...String(detail).split('\\n').map((line, index) => `${index === 0 ? 'Detail   : ' : '           '}${line}`),
+        ...String(detail).split('\n').map((line, index) => `${index === 0 ? 'Detail   : ' : '           '}${line}`),
         `Waktu    : ${formatDisplayDateTime()}`,
         '━━━━━━━━━━━━━━━━━━━━'
     ].join('\n');
@@ -3829,31 +3815,12 @@ function formatBytesForAlert(bytes) {
     return `${size} B`;
 }
 
-function formatTelegramFailureDetail({ error, mediaType = '', method = '', sizeBytes = 0, attempts = 1, correlationId = '' }) {
-    const diagnostics = error?.telegramDiagnostics || {};
-    const failureType = diagnostics.failureType || 'unknown_error';
-    const failureLabels = {
-        timeout: 'Waktu tunggu habis',
-        network_error: 'Gangguan koneksi jaringan',
-        api_error: 'Telegram menolak permintaan',
-        unknown_error: 'Kesalahan tidak diketahui'
-    };
-    const detail = normalizeDetailText(
-        diagnostics.description || error?.message || 'telegram_request_failed',
-        180
-    );
-    const lines = [
-        `MEDIA        : ${mediaType ? String(mediaType).toUpperCase() : 'PESAN TEKS'}`,
-        ...(mediaType ? [`UKURAN       : ${formatBytesForAlert(sizeBytes)}`] : []),
-        `PENYEBAB     : ${failureLabels[failureType] || failureType}`,
-        `PERCOBAAN    : ${Number(attempts || 1)} kali`
-    ];
-    if (method) lines.push(`METODE API   : ${method}`);
-    if (diagnostics.httpStatus) lines.push(`STATUS API   : HTTP ${diagnostics.httpStatus}`);
-    if (diagnostics.causeCode) lines.push(`KODE ERROR   : ${diagnostics.causeCode}`);
-    if (correlationId) lines.push(`ID PELACAKAN : ${correlationId}`);
-    if (detail) lines.push(`PESAN TEKNIS : ${detail}`);
-    return lines.join('\n');
+function formatTelegramFailureDetail({ mediaType = '', sizeBytes = 0 }) {
+    if (!mediaType) return 'PESAN TEKS';
+    return [
+        `MEDIA: ${String(mediaType).toUpperCase()}`,
+        `UKURAN: ${formatBytesForAlert(sizeBytes)}`
+    ].join('\n');
 }
 
 async function withRetries(task, retries, options = {}) {
