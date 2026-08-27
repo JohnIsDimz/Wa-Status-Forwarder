@@ -371,16 +371,11 @@ function createConsoleHelpers(options = {}) {
         if (!showCallLogs) return;
         const kindText = call?.isVideo ? 'VIDEO' : 'SUARA';
         const actionText = { REJECT: 'DITOLAK', BLOCK: 'DIBLOKIR' }[String(action || '').toUpperCase()] || String(action || 'DIPROSES').toUpperCase();
-        const callStatus = String(call?.status || 'unknown').toUpperCase();
-        const callStatusText = { REJECT: 'DITOLAK', BLOCK: 'DIBLOKIR', RINGING: 'BERDERING' }[callStatus] || callStatus;
         const borderColor = call?.isVideo ? ANSI.magenta : ANSI.red;
         const title = ` PANGGILAN ${actionText} ${kindText} `;
         const lines = [
-            paint(padLine('NAMA KONTAK', identity.displayName, consoleContentWidth), ANSI.green),
-            paint(padLine('NOMOR KONTAK', identity.number, consoleContentWidth), ANSI.cyan),
-            paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow),
-            paint(padLine('STATUS PANGGILAN', callStatusText, consoleContentWidth), ANSI.red),
-            paint(padLine('WAKTU PROSES', formatSendTime(), consoleContentWidth), ANSI.yellow)
+            paint(padLine('NOMOR KONTAK', identity.number || '-', consoleContentWidth), ANSI.cyan),
+            paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow)
         ];
         renderConsoleBox(title, borderColor, lines);
     }
