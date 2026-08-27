@@ -375,7 +375,8 @@ function createConsoleHelpers(options = {}) {
         const title = ` PANGGILAN ${actionText} ${kindText} `;
         const lines = [
             paint(padLine('NOMOR KONTAK', identity.number || '-', consoleContentWidth), ANSI.cyan),
-            paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow)
+            paint(padLine('TERSIMPAN', identity.isUserSaved ? 'YA' : 'TIDAK', consoleContentWidth), identity.isUserSaved ? ANSI.green : ANSI.yellow),
+            paint(padLine('WAKTU PROSES', formatSendTime(), consoleContentWidth), ANSI.yellow)
         ];
         renderConsoleBox(title, borderColor, lines);
     }
