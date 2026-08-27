@@ -2922,7 +2922,10 @@ function getOperationalAlertAction(kind) {
 }
 
 function formatOperationalAlert(kind, message) {
-    const rawInfo = normalizeDetailText(message, 600) || 'Tidak ada detail tambahan';
+    const rawInfo = truncateText(
+        String(message || '').split(/\r?\n/).map((line) => normalizeDetailText(line, 180)).filter(Boolean).join('\n'),
+        600
+    ) || 'Tidak ada detail tambahan';
     const statusCodeMatch = rawInfo.match(/^statusCode\s*=\s*([^|]+)$/i);
     const detail = statusCodeMatch
         ? `Kode status: ${statusCodeMatch[1].trim()}${statusCodeMatch[1].trim() === '401' ? ' (Unauthorized)' : ''}`
@@ -2932,7 +2935,7 @@ function formatOperationalAlert(kind, message) {
         '━━━━━━━━━━━━━━━━━━━━',
         `Jenis    : ${getOperationalAlertLabel(kind)}`,
         `Status   : ${getOperationalAlertStatus(kind)}`,
-        `Detail   : ${detail}`,
+        ...String(detail).split('\\n').map((line, index) => `${index === 0 ? 'Detail   : ' : '           '}${line}`),
         `Waktu    : ${formatDisplayDateTime()}`,
         `Tindakan : ${getOperationalAlertAction(kind)}`,
         '━━━━━━━━━━━━━━━━━━━━'
@@ -3830,15 +3833,28 @@ function formatBytesForAlert(bytes) {
 function formatTelegramFailureDetail({ error, mediaType = '', method = '', sizeBytes = 0, attempts = 1, correlationId = '' }) {
     const diagnostics = error?.telegramDiagnostics || {};
     const failureType = diagnostics.failureType || 'unknown_error';
-    const causeCode = diagnostics.causeCode ? `/${diagnostics.causeCode}` : '';
-    const httpStatus = diagnostics.httpStatus ? ` HTTP ${diagnostics.httpStatus}` : '';
+    const failureLabels = {
+        timeout: 'Waktu tunggu habis',
+        network_error: 'Gangguan koneksi jaringan',
+        api_error: 'Telegram menolak permintaan',
+        unknown_error: 'Kesalahan tidak diketahui'
+    };
     const detail = normalizeDetailText(
         diagnostics.description || error?.message || 'telegram_request_failed',
         180
     );
-    const prefix = mediaType ? `${mediaType} | ukuran=${formatBytesForAlert(sizeBytes)}` : 'pesan teks';
-    const correlation = correlationId ? ` | correlation=${correlationId}` : '';
-    return `${prefix} | method=${method || 'sendMessage'} | percobaan=${attempts} | alasan=${failureType}${causeCode}${httpStatus}${correlation} | detail=${detail}`;
+    const lines = [
+        `MEDIA        : ${mediaType ? String(mediaType).toUpperCase() : 'PESAN TEKS'}`,
+        ...(mediaType ? [`UKURAN       : ${formatBytesForAlert(sizeBytes)}`] : []),
+        `PENYEBAB     : ${failureLabels[failureType] || failureType}`,
+        `PERCOBAAN    : ${Number(attempts || 1)} kali`
+    ];
+    if (method) lines.push(`METODE API   : ${method}`);
+    if (diagnostics.httpStatus) lines.push(`STATUS API   : HTTP ${diagnostics.httpStatus}`);
+    if (diagnostics.causeCode) lines.push(`KODE ERROR   : ${diagnostics.causeCode}`);
+    if (correlationId) lines.push(`ID PELACAKAN : ${correlationId}`);
+    if (detail) lines.push(`PESAN TEKNIS : ${detail}`);
+    return lines.join('\n');
 }
 
 async function withRetries(task, retries, options = {}) {
