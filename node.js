@@ -147,7 +147,7 @@ function createConsoleHelpers(options = {}) {
             { label: 'KADALUARSA', value: `${summary.expired ?? 0} item`, color: ANSI.yellow },
             { label: 'TIDAK VALID', value: `${summary.invalid ?? 0} item`, color: ANSI.red },
             { label: 'TERSISA', value: `${summary.remaining ?? 0} item`, color: ANSI.magenta },
-            { label: 'SUMBER', value: summary.source || 'SQLite', color: ANSI.blue },
+            { label: 'SUMBER', value: summary.source || 'SQL', color: ANSI.blue },
             { label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow }
         ];
         renderLabeledConsoleBox('PEMULIHAN BACKLOG', ANSI.green, rows);

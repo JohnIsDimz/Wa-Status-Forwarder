@@ -1525,7 +1525,7 @@ const healthStore = readJsonFile(HEALTH_STORE_FILE, {
         lastHealthCheckAt: null,
         lastCleanupAt: null,
         lastBacklogRecoveryAt: null,
-        backlogRecovery: { found: 0, scheduled: 0, expired: 0, invalid: 0, remaining: 0, source: 'SQLite' },
+        backlogRecovery: { found: 0, scheduled: 0, expired: 0, invalid: 0, remaining: 0, source: 'SQL' },
         cleanup: { auditRemoved: 0, failedJobsRemoved: 0, tempFilesRemoved: 0 }
     }
 });
@@ -1654,7 +1654,7 @@ function ensureOperationalHealthState() {
         healthStore.operational = {};
     }
     if (!healthStore.operational.backlogRecovery || typeof healthStore.operational.backlogRecovery !== 'object') {
-        healthStore.operational.backlogRecovery = { found: 0, scheduled: 0, expired: 0, invalid: 0, remaining: 0, source: 'SQLite' };
+        healthStore.operational.backlogRecovery = { found: 0, scheduled: 0, expired: 0, invalid: 0, remaining: 0, source: 'SQL' };
     }
     if (!healthStore.operational.cleanup || typeof healthStore.operational.cleanup !== 'object') {
         healthStore.operational.cleanup = { auditRemoved: 0, failedJobsRemoved: 0, tempFilesRemoved: 0 };
@@ -4593,7 +4593,7 @@ function publishBacklogRecovery(summary = {}) {
         expired: Math.max(0, Number(summary.expired || 0)),
         invalid: Math.max(0, Number(summary.invalid || 0)),
         remaining: Math.max(0, Number(summary.remaining || 0)),
-        source: String(summary.source || 'SQLite')
+        source: String(summary.source || 'SQL')
     };
     ensureOperationalHealthState();
     healthStore.operational.lastBacklogRecoveryAt = new Date().toISOString();
@@ -4659,7 +4659,7 @@ function loadPendingStatusBacklog(sock) {
         expired,
         invalid,
         remaining: getPendingStatusBacklogCount(),
-        source: 'SQLite'
+        source: 'SQL'
     });
     if (rows.length > 0) {
         recordAudit('status_backlog_loaded', recovery, 'info');
