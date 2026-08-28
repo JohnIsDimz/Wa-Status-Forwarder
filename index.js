@@ -1625,7 +1625,7 @@ function touchSignalHealth(signalKey, source = '') {
 
 function buildSignalAuditLine(metricValue) {
     const countValue = Number(metricValue || 0);
-    return countValue > 0 ? `${countValue}x | sudah ada sinyal` : '0x | belum ada sinyal';
+    return countValue > 0 ? `${countValue}x | ada` : '0x | tidak';
 }
 
 function emitSignalAuditBox() {
