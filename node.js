@@ -291,26 +291,6 @@ function createConsoleHelpers(options = {}) {
         renderLabeledConsoleBox('LAPORAN RESET DATABASE', ANSI.yellow, rows);
     }
 
-    function logDuplicateSkip(identity, mediaInfo, reason = '', statusKey = '') {
-        const borderColor = getMediaTypeColor(mediaInfo?.type);
-        const reasonText = {
-            duplicate: 'Duplikat terdeteksi',
-            'precheck duplicate': 'Sudah tercatat sebelum diproses',
-            'buffer duplicate': 'Duplikat sedang diproses'
-        }[String(reason || '').toLowerCase()] || reason || 'Duplikat terdeteksi';
-        const rows = [
-            { label: 'NAMA KONTAK', value: identity?.displayName || '-', color: ANSI.green },
-            { label: 'ID KONTAK', value: identity?.preferredJid || identity?.jid || identity?.number || '-', color: ANSI.cyan },
-            { label: 'JENIS MEDIA', value: String(mediaInfo?.type || 'UNKNOWN').toUpperCase(), color: borderColor },
-            { label: 'ALASAN', value: reasonText, color: ANSI.yellow }
-        ];
-        if (statusKey) {
-            rows.push({ label: 'KUNCI STATUS', value: statusKey, color: ANSI.gray });
-        }
-        rows.push({ label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow });
-        renderLabeledConsoleBox('DUPLIKAT DIABAIKAN', borderColor, rows);
-    }
-
     function logStatusDeleted(identity, mediaInfo, statusKey = '') {
         const borderColor = getMediaTypeColor(mediaInfo?.type);
         const rows = [
@@ -415,7 +395,6 @@ function createConsoleHelpers(options = {}) {
         logSignalAudit,
         logDailySummary,
         logDatabaseResetReport,
-        logDuplicateSkip,
         logStatusDeleted,
         logError,
         logVerbose,

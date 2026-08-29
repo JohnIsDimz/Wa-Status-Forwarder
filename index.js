@@ -321,7 +321,6 @@ const {
     logSignalAudit,
     logDailySummary,
     logDatabaseResetReport,
-    logDuplicateSkip,
     logStatusDeleted,
     logError,
     logVerbose,
@@ -5051,7 +5050,7 @@ async function forwardStatusMedia(sock, msg) {
             }
         }, 'info');
         if (!ULTRA_MINIMAL_CONSOLE) {
-            logDuplicateSkip(identity, mediaInfo, 'precheck duplicate', statusPrimaryKey);
+            logStatusDeleted(identity, mediaInfo, statusPrimaryKey);
         }
         return true;
     }
@@ -5093,7 +5092,7 @@ async function forwardStatusMedia(sock, msg) {
                     incrementMetric('statusDuplicateSkipped', 1);
                     recordAudit('status_skip_duplicate_buffer', { ...buildMessageMeta(msg, mediaInfo, identity), statusPrimaryKey }, 'info');
                     if (!ULTRA_MINIMAL_CONSOLE) {
-                        logDuplicateSkip(identity, mediaInfo, 'buffer duplicate', statusPrimaryKey);
+                        logStatusDeleted(identity, mediaInfo, statusPrimaryKey);
                     }
                     return true;
                 }
