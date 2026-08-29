@@ -117,7 +117,6 @@ function createConsoleHelpers(options = {}) {
             { label: 'WHATSAPP', value: summary.whatsapp || '-', color: ANSI.cyan },
             { label: 'TELEGRAM', value: summary.telegram || '-', color: ANSI.blue },
             { label: 'DATABASE', value: summary.database || '-', color: ANSI.magenta },
-            { label: 'STORAGE', value: summary.storage || '-', color: ANSI.gray },
             { label: 'ANTREAN', value: summary.queue || '-', color: ANSI.yellow }
         ];
         if (summary.lastStatusAt) {

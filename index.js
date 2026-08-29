@@ -1694,9 +1694,6 @@ function emitOperationalHealth(reason = 'interval') {
             whatsapp: whatsappStatus,
             telegram: telegramStatus,
             database: databaseStatus,
-            storage: healthStore.operational.capacity
-                ? `${Number(healthStore.operational.capacity.freePercent || 0).toFixed(1)}% bebas`
-                : 'belum diperiksa',
             queue: `${queueTotal} item`,
             lastStatusAt: formatLastSignalAt(healthStore.lastStatusReceivedAt) || 'belum ada'
         });
