@@ -5,6 +5,7 @@ let fetchLatestBaileysVersion;
 let makeCacheableSignalKeyStore;
 let downloadMediaMessage;
 let Browsers;
+let WAMessageStubType;
 let baileysLoadPromise;
 
 async function loadBaileys() {
@@ -17,6 +18,7 @@ async function loadBaileys() {
             makeCacheableSignalKeyStore = module.makeCacheableSignalKeyStore;
             downloadMediaMessage = module.downloadMediaMessage;
             Browsers = module.Browsers;
+            WAMessageStubType = module.WAMessageStubType;
             return module;
         });
     }
@@ -320,6 +322,7 @@ const {
     logDailySummary,
     logDatabaseResetReport,
     logDuplicateSkip,
+    logStatusDeleted,
     logError,
     logVerbose,
     logSend,
@@ -4882,9 +4885,35 @@ function buildMessageFromUpdate(updateEntry) {
     return snapshot;
 }
 
+function isStatusRevokeUpdate(entry) {
+    const key = entry?.key || entry?.update?.key;
+    const update = entry?.update || entry;
+    const stubType = update?.messageStubType ?? entry?.messageStubType;
+    const revokeType = WAMessageStubType?.REVOKE ?? 1;
+    const isRevoke = stubType === revokeType || String(stubType || '').toUpperCase() === 'REVOKE';
+    return key?.remoteJid === 'status@broadcast' && isRevoke;
+}
+
+function processStatusRevokeUpdate(entry) {
+    const key = entry?.key || entry?.update?.key;
+    const msg = buildMessageFromUpdate(entry) || { key };
+    const mediaInfo = msg?.message ? extractStatusMediaInfo(msg.message, msg) : null;
+    const participant = getStatusSourceParticipant(msg, mediaInfo);
+    const identity = resolveContactIdentity(participant, msg);
+    const statusKey = getQueueMessageKey(msg, mediaInfo);
+    recordAudit('status_deleted', { ...buildMessageMeta(msg, mediaInfo, identity), statusKey }, 'info');
+    if (!ULTRA_MINIMAL_CONSOLE) {
+        logStatusDeleted(identity, mediaInfo, statusKey);
+    }
+}
+
 function enqueueUpdatedStatuses(sock, updates = []) {
     if (!MESSAGE_UPDATE_FALLBACK || !Array.isArray(updates) || updates.length === 0) return;
     for (const entry of updates) {
+        if (isStatusRevokeUpdate(entry)) {
+            processStatusRevokeUpdate(entry);
+            continue;
+        }
         const hasInlineMessage = Boolean(entry?.update?.message || entry?.message);
         const msg = buildMessageFromUpdate(entry);
         if (!msg || !isStatusLikeMessage(msg)) continue;

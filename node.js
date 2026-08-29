@@ -311,6 +311,20 @@ function createConsoleHelpers(options = {}) {
         renderLabeledConsoleBox('DUPLIKAT DIABAIKAN', borderColor, rows);
     }
 
+    function logStatusDeleted(identity, mediaInfo, statusKey = '') {
+        const borderColor = getMediaTypeColor(mediaInfo?.type);
+        const rows = [
+            { label: 'NAMA KONTAK', value: identity?.displayName || '-', color: ANSI.green },
+            { label: 'ID KONTAK', value: identity?.preferredJid || identity?.jid || identity?.number || '-', color: ANSI.cyan },
+            { label: 'JENIS MEDIA', value: mediaInfo?.type ? String(mediaInfo.type).toUpperCase() : '-', color: borderColor }
+        ];
+        if (statusKey) {
+            rows.push({ label: 'KUNCI STATUS', value: statusKey, color: ANSI.gray });
+        }
+        rows.push({ label: 'WAKTU', value: formatDisplayDateTime(), color: ANSI.yellow });
+        renderLabeledConsoleBox('STATUS DIHAPUS', borderColor, rows);
+    }
+
     function logError(message, detail = '') {
         const rows = [
             { label: 'TOPIK', value: message, color: ANSI.red }
@@ -402,6 +416,7 @@ function createConsoleHelpers(options = {}) {
         logDailySummary,
         logDatabaseResetReport,
         logDuplicateSkip,
+        logStatusDeleted,
         logError,
         logVerbose,
         logSend,
