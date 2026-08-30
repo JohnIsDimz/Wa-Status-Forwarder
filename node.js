@@ -294,9 +294,8 @@ function createConsoleHelpers(options = {}) {
     function logStatusDeleted(identity, mediaInfo, statusKey = '') {
         const borderColor = getMediaTypeColor(mediaInfo?.type);
         const rows = [
-            { label: 'NAMA KONTAK', value: identity?.displayName || '-', color: ANSI.green },
             { label: 'ID KONTAK', value: identity?.preferredJid || identity?.jid || identity?.number || '-', color: ANSI.cyan },
-            { label: 'JENIS MEDIA', value: mediaInfo?.type ? String(mediaInfo.type).toUpperCase() : '-', color: borderColor }
+            { label: 'JENIS MEDIA', value: mediaInfo?.type ? String(mediaInfo.type).toUpperCase() : 'UNKNOWN', color: borderColor }
         ];
         if (statusKey) {
             rows.push({ label: 'KUNCI STATUS', value: statusKey, color: ANSI.gray });

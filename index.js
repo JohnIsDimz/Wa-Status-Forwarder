@@ -4893,10 +4893,41 @@ function isStatusRevokeUpdate(entry) {
     return key?.remoteJid === 'status@broadcast' && isRevoke;
 }
 
+function resolveDeletedStatusMediaInfo(entry, msg) {
+    const candidateMessages = [
+        msg?.message,
+        entry?.message,
+        entry?.update?.message
+    ].filter(Boolean);
+    for (const message of candidateMessages) {
+        const mediaInfo = extractStatusMediaInfo(message, msg);
+        if (mediaInfo?.type && mediaInfo.type !== 'unknown' && mediaInfo.type !== 'status-notification') {
+            return mediaInfo;
+        }
+    }
+    const rawType = String(
+        entry?.mediaType
+        || entry?.update?.mediaType
+        || entry?.messageType
+        || entry?.update?.messageType
+        || ''
+    ).toLowerCase();
+    const typeMap = [
+        ['image', 'image'],
+        ['video', 'video'],
+        ['audio', 'audio'],
+        ['document', 'document'],
+        ['sticker', 'sticker'],
+        ['text', 'text']
+    ];
+    const mappedType = typeMap.find(([needle]) => rawType.includes(needle))?.[1];
+    return mappedType ? { type: mappedType } : null;
+}
+
 function processStatusRevokeUpdate(entry) {
     const key = entry?.key || entry?.update?.key;
     const msg = buildMessageFromUpdate(entry) || { key };
-    const mediaInfo = msg?.message ? extractStatusMediaInfo(msg.message, msg) : null;
+    const mediaInfo = resolveDeletedStatusMediaInfo(entry, msg);
     const participant = getStatusSourceParticipant(msg, mediaInfo);
     const identity = resolveContactIdentity(participant, msg);
     const statusKey = getQueueMessageKey(msg, mediaInfo);
