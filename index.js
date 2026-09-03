@@ -2898,7 +2898,7 @@ function getOperationalAlertStatus(kind) {
         database_rusak: 'Database tidak dapat digunakan dengan normal',
         database_warning: 'Pemeriksaan database menemukan peringatan',
         telegram_gagal_kirim: 'Pesan tidak berhasil diteruskan ke Telegram',
-        telegram_gagal_kirim_media: 'Media tidak berhasil diteruskan ke Telegram'
+        telegram_gagal_kirim_media: 'Media tidak berhasil'
     };
     return statuses[kind] || 'Bot memerlukan pemeriksaan';
 }
@@ -2912,12 +2912,16 @@ function formatOperationalAlert(kind, message) {
     const detail = statusCodeMatch
         ? `Kode status: ${statusCodeMatch[1].trim()}${statusCodeMatch[1].trim() === '401' ? ' (Unauthorized)' : ''}`
         : rawInfo;
+    const detailLines = String(detail).split('\n');
+    const formattedDetailLines = kind === 'telegram_gagal_kirim_media'
+        ? detailLines
+        : detailLines.map((line, index) => `${index === 0 ? 'Detail   : ' : '           '}${line}`);
     return [
         'ALERT BOT',
         '━━━━━━━━━━━━━━━━━━━━',
         `Jenis    : ${getOperationalAlertLabel(kind)}`,
         `Status   : ${getOperationalAlertStatus(kind)}`,
-        ...String(detail).split('\n').map((line, index) => `${index === 0 ? 'Detail   : ' : '           '}${line}`),
+        ...formattedDetailLines,
         `Waktu    : ${formatDisplayDateTime()}`,
         '━━━━━━━━━━━━━━━━━━━━'
     ].join('\n');
